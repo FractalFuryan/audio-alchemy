@@ -1,6 +1,7 @@
 import fs from "fs";
 import { NextRequest, NextResponse } from "next/server";
 import { getGeneration, resolveAudioAbsolutePath } from "@/lib/generation";
+import { formatActionableError } from "@/lib/user-errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,17 +14,33 @@ export async function GET(
     const { id } = await context.params;
     const gen = getGeneration(id);
     if (!gen) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json(
+        {
+          error: "That track was not found.",
+          code: "not_found",
+          hint: "Refresh the library — it may have been deleted.",
+        },
+        { status: 404 }
+      );
     }
     if (gen.status !== "completed") {
       return NextResponse.json(
-        { error: "Audio not ready", status: gen.status },
+        {
+          error: "Audio is not ready yet.",
+          code: "missing_audio",
+          hint: `Track status is ${gen.status}. Wait for completion or retry the generation.`,
+          status: gen.status,
+        },
         { status: 409 }
       );
     }
     const abs = resolveAudioAbsolutePath(gen);
     if (!abs) {
-      return NextResponse.json({ error: "Audio file missing" }, { status: 404 });
+      const a = formatActionableError(new Error("Audio file missing"));
+      return NextResponse.json(
+        { error: a.message, code: a.code, hint: a.hint },
+        { status: 404 }
+      );
     }
 
     const data = fs.readFileSync(abs);
@@ -47,7 +64,10 @@ export async function GET(
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to serve audio";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const a = formatActionableError(err);
+    return NextResponse.json(
+      { error: a.message, code: a.code, hint: a.hint },
+      { status: 500 }
+    );
   }
 }

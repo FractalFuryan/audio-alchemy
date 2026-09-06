@@ -5,7 +5,11 @@ import {
   cancelGeneration,
   renameGeneration,
   deleteGeneration,
+  setGenerationFavorite,
+  setGenerationUserTags,
+  setGenerationCollection,
 } from "@/lib/generation";
+import { normalizeTagList } from "@/lib/library-meta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +51,45 @@ export async function PATCH(
         return NextResponse.json({ error: "Not found" }, { status: 404 });
       }
       gen = renamed;
+    }
+
+    if (body && typeof body.favorite === "boolean") {
+      const fav = await setGenerationFavorite(id, body.favorite);
+      if (!fav) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+      gen = fav;
+    }
+
+    if (body && Array.isArray(body.userTags)) {
+      const tags = normalizeTagList(
+        body.userTags.filter((t: unknown): t is string => typeof t === "string")
+      );
+      const tagged = await setGenerationUserTags(id, tags);
+      if (!tagged) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+      gen = tagged;
+    }
+
+    if (body && "collectionId" in body) {
+      const raw = body.collectionId;
+      const collectionId =
+        raw === null || raw === "" || raw === "none"
+          ? null
+          : typeof raw === "string"
+            ? raw
+            : null;
+      try {
+        const moved = await setGenerationCollection(id, collectionId);
+        if (!moved) {
+          return NextResponse.json({ error: "Not found" }, { status: 404 });
+        }
+        gen = moved;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Invalid collection";
+        return NextResponse.json({ error: message }, { status: 400 });
+      }
     }
 
     if (body && body.cancel === true) {

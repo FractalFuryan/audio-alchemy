@@ -2,10 +2,13 @@ import { spawnSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 
+/** Conservative Create UI / API post-FX presets. Default is always off. */
+export type PostFxPreset = "off" | "light" | "loudness";
+
 export type PostprocessResult =
-  | { ok: true; path: string; mime: string; skipped?: false }
-  | { ok: true; path: string; mime: string; skipped: true; reason: string }
-  | { ok: false; path: string; mime: string; error: string };
+  | { ok: true; path: string; mime: string; skipped?: false; preset?: PostFxPreset }
+  | { ok: true; path: string; mime: string; skipped: true; reason: string; preset?: PostFxPreset }
+  | { ok: false; path: string; mime: string; error: string; preset?: PostFxPreset };
 
 function envTruthy(name: string): boolean {
   const v = (process.env[name] || "").trim().toLowerCase();
@@ -34,6 +37,54 @@ export function ffmpegAvailable(): boolean {
   }
 }
 
+/** Windows-oriented setup hint when ffmpeg is missing (safe to show even if FX is off). */
+export function ffmpegMissingHint(): string {
+  const fromEnv = Boolean((process.env.FFMPEG_PATH || "").trim());
+  if (fromEnv) {
+    return `FFMPEG_PATH is set but ffmpeg was not runnable (${ffmpegBin()}). Check the path points at a Windows ffmpeg.exe (WSL ffmpeg is not visible to Windows Node). Post-FX will be skipped if selected.`;
+  }
+  return "ffmpeg not found on PATH. On Windows set FFMPEG_PATH to ffmpeg.exe (WSL ffmpeg is not visible to Windows Node), or install a native Windows ffmpeg build. Post-FX stays optional and never fails a completed generation.";
+}
+
+export function parsePostFxPreset(raw: unknown): PostFxPreset | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+  if (v === "off" || v === "none" || v === "0" || v === "false") return "off";
+  if (v === "light" || v === "light_polish" || v === "light-polish" || v === "polish") {
+    return "light";
+  }
+  if (
+    v === "loudness" ||
+    v === "loudness_normalize" ||
+    v === "loudness-normalize" ||
+    v === "normalize" ||
+    v === "loudnorm"
+  ) {
+    return "loudness";
+  }
+  return null;
+}
+
+/**
+ * Resolve effective preset for a job.
+ * Per-request value wins; else env POSTPROCESS=1 maps to light; else off.
+ */
+export function resolvePostFxPreset(requestPreset?: string | null): PostFxPreset {
+  const parsed = parsePostFxPreset(requestPreset);
+  if (parsed) return parsed;
+  if (isPostprocessEnabled()) {
+    const envPreset = parsePostFxPreset(process.env.POSTPROCESS_PRESET);
+    return envPreset && envPreset !== "off" ? envPreset : "light";
+  }
+  return "off";
+}
+
+export function postFxPresetLabel(preset: PostFxPreset): string {
+  if (preset === "light") return "Light polish";
+  if (preset === "loudness") return "Loudness normalize";
+  return "Off";
+}
+
 function mimeForExt(ext: string): string {
   const e = ext.replace(/^\./, "").toLowerCase();
   if (e === "wav") return "audio/wav";
@@ -43,23 +94,32 @@ function mimeForExt(ext: string): string {
   return "audio/mpeg";
 }
 
-function buildFilterChain(): string {
+/**
+ * Map conservative presets onto the existing ffmpeg filter family.
+ * - light: high-pass + gentle presence EQ + soft true-peak limiter (no loudnorm)
+ * - loudness: loudnorm + true-peak limiter (env loudness targets)
+ */
+export function buildFilterChain(preset: Exclude<PostFxPreset, "off">): string {
   const hp = Number(process.env.POSTPROCESS_HIGHPASS_HZ || "80");
   const loudI = process.env.POSTPROCESS_LOUDNORM_I || "-14";
   const loudTP = process.env.POSTPROCESS_LOUDNORM_TP || "-1.0";
   const loudLRA = process.env.POSTPROCESS_LOUDNORM_LRA || "11";
   const peakDb = Number(process.env.POSTPROCESS_TRUE_PEAK_DB || "-1");
-  // -1 dBTP ≈ 0.89125 linear
-  const limitLin = Math.pow(10, peakDb / 20);
+  const limitLin = Math.pow(10, (Number.isFinite(peakDb) ? peakDb : -1) / 20);
 
-  const parts = [
+  if (preset === "loudness") {
+    return [
+      `loudnorm=I=${loudI}:TP=${loudTP}:LRA=${loudLRA}`,
+      `alimiter=limit=${limitLin.toFixed(5)}:level=disabled`,
+    ].join(",");
+  }
+
+  // light polish
+  return [
     `highpass=f=${Number.isFinite(hp) ? hp : 80}`,
-    // Gentle presence shelf — subtle, CPU-cheap
     `equalizer=f=2500:t=q:w=1.2:g=1.5`,
-    `loudnorm=I=${loudI}:TP=${loudTP}:LRA=${loudLRA}`,
     `alimiter=limit=${limitLin.toFixed(5)}:level=disabled`,
-  ];
-  return parts.join(",");
+  ].join(",");
 }
 
 /**
@@ -69,17 +129,27 @@ function buildFilterChain(): string {
 export async function maybePostprocessAudio(opts: {
   absPath: string;
   mime: string;
+  /** Per-job preset (preferred). Falls back to env POSTPROCESS. */
+  preset?: string | null;
   onStage?: (message: string, pct?: number) => void;
 }): Promise<PostprocessResult> {
   const { absPath, mime, onStage } = opts;
+  const preset = resolvePostFxPreset(opts.preset);
 
-  if (!isPostprocessEnabled()) {
-    return { ok: true, path: absPath, mime, skipped: true, reason: "POSTPROCESS off" };
+  if (preset === "off") {
+    return {
+      ok: true,
+      path: absPath,
+      mime,
+      skipped: true,
+      reason: "Post-FX off",
+      preset,
+    };
   }
 
   if (!ffmpegAvailable()) {
     console.warn(
-      "[postprocess] POSTPROCESS is enabled but ffmpeg was not found (PATH or FFMPEG_PATH). On Windows, WSL ffmpeg is not visible to Windows Node — set FFMPEG_PATH to a Windows ffmpeg.exe, or install ffmpeg for this OS. Skipping post-FX (keeping original audio)."
+      `[postprocess] Post-FX preset "${preset}" selected but ffmpeg was not found (PATH or FFMPEG_PATH). On Windows, WSL ffmpeg is not visible to Windows Node — set FFMPEG_PATH to a Windows ffmpeg.exe, or install ffmpeg for this OS. Skipping post-FX (keeping original audio).`
     );
     return {
       ok: true,
@@ -87,6 +157,7 @@ export async function maybePostprocessAudio(opts: {
       mime,
       skipped: true,
       reason: "ffmpeg not found (PATH or FFMPEG_PATH)",
+      preset,
     };
   }
 
@@ -96,14 +167,20 @@ export async function maybePostprocessAudio(opts: {
       path: absPath,
       mime,
       error: `Audio file missing: ${absPath}`,
+      preset,
     };
   }
 
-  onStage?.("Post-processing audio (ffmpeg)…", 90);
+  onStage?.(
+    preset === "loudness"
+      ? "Post-processing audio (loudness normalize)…"
+      : "Post-processing audio (light polish)…",
+    90
+  );
 
   const ext = path.extname(absPath) || ".mp3";
   const tmpOut = `${absPath}.pp${ext}`;
-  const filter = buildFilterChain();
+  const filter = buildFilterChain(preset);
 
   try {
     await runFfmpeg([
@@ -115,7 +192,6 @@ export async function maybePostprocessAudio(opts: {
       absPath,
       "-af",
       filter,
-      // Re-encode to same container family; wav stays pcm, else libmp3lame/aac/etc.
       ...encodeArgsForExt(ext),
       tmpOut,
     ]);
@@ -124,9 +200,8 @@ export async function maybePostprocessAudio(opts: {
       throw new Error("ffmpeg produced empty or missing output");
     }
 
-    // Replace original in place (same basename so DB path stays valid).
     fs.renameSync(tmpOut, absPath);
-    return { ok: true, path: absPath, mime: mimeForExt(ext) || mime };
+    return { ok: true, path: absPath, mime: mimeForExt(ext) || mime, preset };
   } catch (err) {
     try {
       if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
@@ -137,7 +212,7 @@ export async function maybePostprocessAudio(opts: {
     console.warn(
       `[postprocess] ffmpeg post-FX failed — keeping original audio. ${message}`
     );
-    return { ok: false, path: absPath, mime, error: message };
+    return { ok: false, path: absPath, mime, error: message, preset };
   }
 }
 
@@ -147,7 +222,6 @@ function encodeArgsForExt(ext: string): string[] {
   if (e === "flac") return ["-c:a", "flac"];
   if (e === "ogg" || e === "opus") return ["-c:a", "libopus", "-b:a", "128k"];
   if (e === "aac" || e === "m4a") return ["-c:a", "aac", "-b:a", "192k"];
-  // mp3 / default
   return ["-c:a", "libmp3lame", "-b:a", "192k"];
 }
 
@@ -198,4 +272,3 @@ export async function probeLoudnessLufs(absPath: string): Promise<string> {
     return "";
   }
 }
-

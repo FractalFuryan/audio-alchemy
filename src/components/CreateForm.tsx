@@ -2,11 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { Generation, GenerationMode } from "@/lib/types";
-import { modelFamilyLabel, classifyModelFamily } from "@/lib/model-family";
+import type { Generation, GenerationMode, PlanningMode } from "@/lib/types";
+import {
+  clearConflictingTags,
+  compileMusicBrief,
+  type PromptCompileResult,
+} from "@/lib/prompt-compiler";
+import { classifyModelFamily } from "@/lib/model-family";
 import { resolveDisplayModelLabel } from "@/lib/ace-capabilities";
 import { titleFromPrompt } from "@/lib/title";
 import { AudioPlayer } from "./AudioPlayer";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
 
 type HealthSettings = {
   modelConfigured?: boolean;
@@ -62,7 +68,22 @@ type HealthInfo = {
   postprocess?: {
     enabled?: boolean;
     ffmpegAvailable?: boolean;
+    ffmpegPathConfigured?: boolean;
     hint?: string | null;
+    defaultPreset?: "off" | "light" | "loudness";
+    envDefaultPreset?: "off" | "light" | "loudness";
+    presets?: Array<{
+      id: "off" | "light" | "loudness";
+      label: string;
+      description?: string;
+    }>;
+  };
+  planner?: {
+    available?: boolean;
+    reason?: string | null;
+    matchedModels?: string[];
+    heuristic?: string;
+    aceConnected?: boolean;
   };
 };
 
@@ -91,8 +112,11 @@ export function CreateForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const linkedId = searchParams.get("id");
+  const variationId = searchParams.get("variation");
 
   const [prompt, setPrompt] = useState("");
+  const [variationOf, setVariationOf] = useState<string | null>(null);
+  const [variationBanner, setVariationBanner] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [titleTouched, setTitleTouched] = useState(false);
   const [style, setStyle] = useState("");
@@ -100,6 +124,7 @@ export function CreateForm() {
   const [durationSec, setDurationSec] = useState(60);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorHint, setErrorHint] = useState<string | null>(null);
   const [generation, setGeneration] = useState<Generation | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [health, setHealth] = useState<HealthInfo | null>(null);
@@ -113,6 +138,13 @@ export function CreateForm() {
   const [keepTagsOnTemplate, setKeepTagsOnTemplate] = useState(false);
   const [preset, setPreset] = useState<"fast" | "quality">("fast");
   const [fineTuneOpen, setFineTuneOpen] = useState(false);
+  const [postFxOpen, setPostFxOpen] = useState(false);
+  const [postFxPreset, setPostFxPreset] = useState<"off" | "light" | "loudness">("off");
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("direct");
+  const [musicBrief, setMusicBrief] = useState("");
+  const [briefTouched, setBriefTouched] = useState(false);
+  const [briefOpen, setBriefOpen] = useState(true);
+  const [compileResult, setCompileResult] = useState<PromptCompileResult | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advInferenceSteps, setAdvInferenceSteps] = useState<string>("");
   const [advModel, setAdvModel] = useState("");
@@ -147,6 +179,8 @@ export function CreateForm() {
           data.postprocess && typeof data.postprocess === "object"
             ? data.postprocess
             : undefined,
+        planner:
+          data.planner && typeof data.planner === "object" ? data.planner : undefined,
       });
       if (
         !advTouched &&
@@ -289,6 +323,47 @@ export function CreateForm() {
     };
   }, [linkedId]);
 
+  // Prefill Create from an existing track for "Generate variation" (new seed on submit).
+  useEffect(() => {
+    if (!variationId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/generations/${variationId}`);
+        const data = await res.json();
+        if (cancelled || !data.generation) return;
+        const g = data.generation as Generation;
+        setPrompt(g.prompt || "");
+        setStyle(g.style || "");
+        setLyrics(g.lyrics || "");
+        setDurationSec(g.durationSec || 60);
+        const base = (g.title || "Untitled").trim();
+        const nextTitle = base.toLowerCase().startsWith("variation of")
+          ? base
+          : `Variation of ${base}`.slice(0, 80);
+        setTitle(nextTitle);
+        setTitleTouched(true);
+        if (g.preset === "fast" || g.preset === "quality") {
+          setPreset(g.preset);
+        }
+        if (g.requestedModelName) {
+          setAdvModel(g.requestedModelName);
+          setAdvTouched(true);
+          setAdvancedOpen(true);
+        }
+        setVariationOf(g.id);
+        setVariationBanner(g.title || g.id.slice(0, 8));
+        setGeneration(null);
+        setFineTuneOpen(true);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variationId]);
+
   useEffect(() => {
     if (!generation) return;
     if (
@@ -319,12 +394,31 @@ export function CreateForm() {
     health?.mode === "ace-step" && health.aceStep === false;
   const aceBusy =
     health?.mode === "ace-step" && Boolean(health.settings?.busy);
+
+  const plannerAvailable = Boolean(health?.planner?.available);
+  const plannerReason =
+    health?.planner?.reason ||
+    "Local ACE planner/LM not available";
+
+  // Deterministic compile whenever prompt/style/lyrics change (Song focus preview).
+  useEffect(() => {
+    const result = compileMusicBrief({ prompt, style, lyrics });
+    setCompileResult(result);
+    if (planningMode === "song-focus" && !briefTouched) {
+      setMusicBrief(result.musicBrief);
+    }
+  }, [prompt, style, lyrics, planningMode, briefTouched]);
+
+  const songFocusBlocked =
+    planningMode === "song-focus" && (!plannerAvailable || health?.mode !== "ace-step");
   const canGenerate =
     !busy &&
     !healthLoading &&
     Boolean(prompt.trim()) &&
     !aceUnhealthy &&
-    !aceBusy;
+    !aceBusy &&
+    !songFocusBlocked &&
+    (planningMode !== "song-focus" || Boolean(musicBrief.trim()));
 
   const styleTags = useMemo(
     () =>
@@ -334,6 +428,7 @@ export function CreateForm() {
         .filter(Boolean),
     [style]
   );
+
 
   const sftAvailable = useMemo(() => {
     const items = health?.models?.items || [];
@@ -368,6 +463,7 @@ export function CreateForm() {
     e.preventDefault();
     if (!canGenerate) return;
     setError(null);
+    setErrorHint(null);
     setBusy(true);
     setGeneration(null);
     try {
@@ -381,13 +477,19 @@ export function CreateForm() {
           durationSec,
           title: title.trim() || undefined,
           preset,
+          planningMode,
+          ...(planningMode === "song-focus"
+            ? { musicBrief: musicBrief.trim(), thinking: true }
+            : { thinking: false }),
+          ...(variationOf ? { variationOf } : {}),
           ...(advInferenceSteps.trim()
             ? { inferenceSteps: Number(advInferenceSteps) }
             : {}),
           ...(advModel.trim() ? { model: advModel.trim() } : {}),
           ...(advAudioFormat.trim() ? { audioFormat: advAudioFormat.trim() } : {}),
-          thinking: false,
           batchSize: 1,
+          postFxPreset,
+          // ACE-Step uses use_random_seed=true server-side → new seed for variations
         }),
       });
       const data = await res.json();
@@ -395,10 +497,13 @@ export function CreateForm() {
         if (data.generation) {
           setGeneration(data.generation as Generation);
         }
+        if (typeof data.hint === "string") setErrorHint(data.hint);
         throw new Error(data.error || "Generation failed");
       }
       const gen = data.generation as Generation;
       setGeneration(gen);
+      setVariationOf(null);
+      setVariationBanner(null);
       router.replace(`/?id=${gen.id}`, { scroll: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -467,10 +572,19 @@ export function CreateForm() {
   const formDisabled = busy || Boolean(isOpen);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
+      <div className="flex flex-col items-center justify-center gap-2 pt-1 pb-1 opacity-90">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/audio-alchemy-logo.png"
+          alt="Audio Alchemy"
+          className="h-12 w-auto max-w-[min(100%,280px)] object-contain opacity-90 sm:h-14"
+        />
+      </div>
+
       <form
         onSubmit={onSubmit}
-        className="rounded-2xl border border-alchemy-border bg-alchemy-surface/90 p-5 sm:p-6 shadow-xl shadow-black/30"
+        className="aa-card p-5 sm:p-6"
       >
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -486,19 +600,49 @@ export function CreateForm() {
 
         <GpuStatusPanel health={health} loading={healthLoading} sftAvailable={sftAvailable} />
 
+        <div className="mb-4">
+          <DiagnosticsPanel compact />
+        </div>
+
         {aceUnhealthy ? (
           <div className="mb-4 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
-            ACE-Step is unreachable. Start the API or switch{" "}
-            <code className="text-xs">GENERATION_MODE</code> to{" "}
-            <code className="text-xs">mock</code>. Generate is disabled until
-            health recovers.
+            <p className="font-medium">ACE-Step is offline or unreachable.</p>
+            <p className="mt-1 text-xs text-alchemy-gold/90">
+              Start the ACE-Step API (check <code className="text-[10px]">ACESTEP_API_URL</code>),
+              or set <code className="text-[10px]">GENERATION_MODE=mock</code> for demos without a worker.
+              Generate stays disabled until health recovers — see Diagnostics below.
+            </p>
           </div>
         ) : null}
 
         {aceBusy && !aceUnhealthy ? (
           <div className="mb-4 rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-sm text-alchemy-gold">
-            Another ACE-Step job is processing (single-flight for 10GB VRAM).
-            Wait or cancel it before starting a new one.
+            <p className="font-medium">GPU is busy (single-flight).</p>
+            <p className="mt-1 text-xs opacity-90">
+              Only one ACE-Step job runs at a time to protect ~10GB VRAM. Wait for
+              the current job, or cancel it from the result panel / library, then retry.
+            </p>
+          </div>
+        ) : null}
+
+        {variationBanner ? (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-alchemy-accent/40 bg-alchemy-accent/10 px-3 py-2 text-sm text-alchemy-text">
+            <span>
+              Variation of <strong className="text-alchemy-gold">{variationBanner}</strong>
+              {" "}
+              — prompt & settings carried forward; a new seed will be used.
+            </span>
+            <button
+              type="button"
+              className="aa-btn !py-1 text-xs"
+              onClick={() => {
+                setVariationOf(null);
+                setVariationBanner(null);
+                router.replace("/", { scroll: false });
+              }}
+            >
+              Clear
+            </button>
           </div>
         ) : null}
 
@@ -524,6 +668,162 @@ export function CreateForm() {
             className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-3 text-base text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
           />
         </section>
+
+        {/* Direct vs Song focus */}
+        <section className="mb-5">
+          <p className="mb-1.5 text-sm font-medium text-alchemy-text">Planning</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                {
+                  id: "direct" as const,
+                  label: "Direct",
+                  desc: "Submit your prompt as written (faster).",
+                },
+                {
+                  id: "song-focus" as const,
+                  label: "Song focus",
+                  desc: "Local ACE planner — better structure, slower.",
+                },
+              ] as const
+            ).map((item) => {
+              const active = planningMode === item.id;
+              const blocked =
+                item.id === "song-focus" &&
+                (!plannerAvailable || health?.mode !== "ace-step");
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  disabled={formDisabled}
+                  onClick={() => {
+                    setPlanningMode(item.id);
+                    setBriefTouched(false);
+                    if (item.id === "song-focus") {
+                      const r = compileMusicBrief({ prompt, style, lyrics });
+                      setCompileResult(r);
+                      setMusicBrief(r.musicBrief);
+                      setBriefOpen(true);
+                    }
+                  }}
+                  className={`rounded-xl border px-3 py-3 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
+                    active
+                      ? blocked
+                        ? "border-alchemy-gold/70 bg-alchemy-gold/10 text-alchemy-text"
+                        : "border-alchemy-accentGlow bg-alchemy-accent/15 text-alchemy-text shadow-glow-accent"
+                      : "border-alchemy-border bg-alchemy-bg text-alchemy-muted hover:border-alchemy-accent/40"
+                  }`}
+                >
+                  <span className="block text-sm font-semibold text-alchemy-text">
+                    {item.label}
+                  </span>
+                  <span className="mt-1 block text-[11px] leading-snug">{item.desc}</span>
+                  {item.id === "song-focus" && blocked ? (
+                    <span className="mt-1 block text-[11px] text-alchemy-gold">
+                      Unavailable — pick Direct
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-alchemy-muted">
+            Uses the local ACE planner to improve structure and prompt adherence. Slower
+            than Direct. Your prompt stays on this machine.
+          </p>
+          {planningMode === "song-focus" && songFocusBlocked ? (
+            <div className="mt-2 rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-xs text-alchemy-gold">
+              <p className="font-medium">Song focus unavailable</p>
+              <p className="mt-1 opacity-90">{plannerReason}</p>
+              <p className="mt-1 opacity-90">
+                Choose <strong className="text-alchemy-text">Direct</strong> to generate.
+                Song focus will not silently fall back while still selected.
+              </p>
+              <button
+                type="button"
+                className="aa-btn mt-2 !py-1 text-xs"
+                disabled={formDisabled}
+                onClick={() => setPlanningMode("direct")}
+              >
+                Switch to Direct
+              </button>
+            </div>
+          ) : null}
+
+          {planningMode === "song-focus" && !songFocusBlocked ? (
+            <div className="mt-3 space-y-2">
+              {compileResult && compileResult.conflicts.length > 0 ? (
+                <div className="rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-xs text-alchemy-gold">
+                  <p className="font-medium">Style tags conflict with the prompt</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    {compileResult.conflicts.map((c) => (
+                      <li key={c.tag + c.reason}>
+                        <span className="text-alchemy-text">{c.tag}</span> — {c.reason}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    className="aa-btn mt-2 !py-1 text-xs"
+                    disabled={formDisabled}
+                    onClick={() => {
+                      const next = clearConflictingTags(style, compileResult.conflicts);
+                      setStyle(next);
+                      setBriefTouched(false);
+                    }}
+                  >
+                    Clear conflicting tags
+                  </button>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setBriefOpen((o) => !o)}
+                className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/60 px-3 py-2 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
+              >
+                <span className="font-medium">Final music brief</span>
+                <span className="text-xs text-alchemy-muted">
+                  {briefOpen ? "Hide" : "Show"} · editable before Generate
+                </span>
+              </button>
+              {briefOpen ? (
+                <div className="space-y-2 rounded-xl border border-alchemy-border bg-alchemy-bg/30 px-3 py-3">
+                  <p className="text-xs text-alchemy-muted">
+                    Deterministic local organizer (not a cloud LLM). Lyrics stay separate.
+                    Edit freely before Generate — Song focus sends this brief with{" "}
+                    <code className="text-[11px]">thinking: true</code>.
+                  </p>
+                  <textarea
+                    id="create-music-brief"
+                    disabled={formDisabled}
+                    value={musicBrief}
+                    onChange={(e) => {
+                      setBriefTouched(true);
+                      setMusicBrief(e.target.value);
+                    }}
+                    rows={5}
+                    className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 font-mono disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    className="aa-btn !py-1 text-xs"
+                    disabled={formDisabled}
+                    onClick={() => {
+                      const r = compileMusicBrief({ prompt, style, lyrics });
+                      setCompileResult(r);
+                      setMusicBrief(r.musicBrief);
+                      setBriefTouched(false);
+                    }}
+                  >
+                    Recompile from prompt
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
 
         {/* Quality / Fast — immediately visible */}
         <section className="mb-5">
@@ -557,9 +857,9 @@ export function CreateForm() {
                     }
                     if (item?.model) setAdvModel(item.model);
                   }}
-                  className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-50 ${
+                  className={`rounded-xl border px-3 py-3 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
                     active
-                      ? "border-alchemy-accent/60 bg-alchemy-accent/15 text-alchemy-text"
+                      ? "border-alchemy-accentGlow bg-alchemy-accent/15 text-alchemy-text shadow-glow-accent"
                       : "border-alchemy-border bg-alchemy-bg text-alchemy-muted hover:border-alchemy-accent/40"
                   }`}
                 >
@@ -592,8 +892,101 @@ export function CreateForm() {
               );
             })}
           </div>
-          {health?.postprocess?.hint ? (
-            <p className="mt-2 text-xs text-alchemy-gold">{health.postprocess.hint}</p>
+        </section>
+
+        {/* Optional post-processing — disabled by default; never blocks generation */}
+        <section className="mb-5">
+          <button
+            type="button"
+            onClick={() => setPostFxOpen((o) => !o)}
+            className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/60 px-3 py-2.5 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
+          >
+            <span className="font-medium">
+              Post-processing{" "}
+              <span className="font-normal text-alchemy-muted">(optional)</span>
+            </span>
+            <span className="text-xs text-alchemy-muted">
+              {postFxOpen ? "Hide" : "Show"} · {postFxPreset === "off" ? "Off" : postFxPreset === "light" ? "Light polish" : "Loudness normalize"}
+            </span>
+          </button>
+          {postFxOpen ? (
+            <div className="mt-3 space-y-3 rounded-xl border border-alchemy-border bg-alchemy-bg/30 px-3 py-4">
+              <p className="text-xs text-alchemy-muted">
+                Conservative ffmpeg CPU effects after generation. Default is{" "}
+                <strong className="text-alchemy-text">Off</strong>. Missing ffmpeg skips FX
+                and still completes the track — it never fails a finished generation.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {(
+                  [
+                    {
+                      id: "off" as const,
+                      label: "Off",
+                      desc: "No post-FX (default).",
+                    },
+                    {
+                      id: "light" as const,
+                      label: "Light polish",
+                      desc: "High-pass + gentle presence EQ + soft true-peak limit.",
+                    },
+                    {
+                      id: "loudness" as const,
+                      label: "Loudness normalize",
+                      desc: "loudnorm to env targets + true-peak limit.",
+                    },
+                  ] as const
+                ).map((item) => {
+                  const active = postFxPreset === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      disabled={formDisabled}
+                      onClick={() => setPostFxPreset(item.id)}
+                      className={`rounded-xl border px-3 py-3 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
+                        active
+                          ? "border-alchemy-gold/70 bg-alchemy-gold/10 text-alchemy-text"
+                          : "border-alchemy-border bg-alchemy-bg text-alchemy-muted hover:border-alchemy-accent/40"
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold text-alchemy-text">
+                        {item.label}
+                      </span>
+                      <span className="mt-1 block text-[11px] leading-snug">{item.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="rounded-lg border border-alchemy-border/80 bg-alchemy-bg/50 px-3 py-2 text-xs text-alchemy-muted">
+                <p>
+                  ffmpeg:{" "}
+                  <span
+                    className={
+                      health?.postprocess?.ffmpegAvailable
+                        ? "text-alchemy-success"
+                        : "text-alchemy-gold"
+                    }
+                  >
+                    {healthLoading
+                      ? "…"
+                      : health?.postprocess?.ffmpegAvailable
+                        ? health.postprocess.ffmpegPathConfigured
+                          ? "available (FFMPEG_PATH)"
+                          : "available (PATH)"
+                        : "not found"}
+                  </span>
+                  {postFxPreset !== "off" && !health?.postprocess?.ffmpegAvailable ? (
+                    <span className="text-alchemy-gold">
+                      {" "}
+                      — FX will be skipped for this run
+                    </span>
+                  ) : null}
+                </p>
+                {health?.postprocess?.hint ? (
+                  <p className="mt-1.5 text-alchemy-gold/90">{health.postprocess.hint}</p>
+                ) : null}
+              </div>
+            </div>
           ) : null}
         </section>
 
@@ -606,12 +999,69 @@ export function CreateForm() {
           >
             <span className="font-medium">Fine-tune</span>
             <span className="text-xs text-alchemy-muted">
-              {fineTuneOpen ? "Hide" : "Show"} · templates, tags, lyrics, duration, expert
+              {fineTuneOpen ? "Hide" : "Show"} · templates, duration, quality levers, expert
             </span>
           </button>
 
           {fineTuneOpen ? (
             <div className="mt-3 space-y-5 rounded-xl border border-alchemy-border bg-alchemy-bg/30 px-3 py-4">
+              {/* Honest quality levers */}
+              <div className="rounded-xl border border-alchemy-accent/25 bg-alchemy-accent/5 px-3 py-3 text-xs text-alchemy-muted">
+                <p className="mb-2 text-sm font-medium text-alchemy-text">Quality levers (honest)</p>
+                <ul className="space-y-1.5 leading-snug">
+                  <li>
+                    <span className="text-alchemy-gold">Preset:</span>{" "}
+                    {preset === "fast" ? "Fast (Turbo-class)" : "Quality (SFT-class)"}
+                    {" · "}steps{" "}
+                    <span className="tabular-nums text-alchemy-text">
+                      {advInferenceSteps.trim() ||
+                        health?.presets?.items?.find((x) => x.id === preset)?.inferenceSteps ||
+                        health?.settings?.inferenceSteps ||
+                        (preset === "fast" ? 8 : 32)}
+                    </span>
+                    {" · "}duration{" "}
+                    <span className="tabular-nums text-alchemy-text">{durationSec}s</span>
+                  </li>
+                  <li>
+                    <span className="text-alchemy-gold">Model:</span>{" "}
+                    requested{" "}
+                    <code className="text-[11px] text-alchemy-text">
+                      {advModel.trim() ||
+                        health?.presets?.items?.find((x) => x.id === preset)?.model ||
+                        health?.settings?.model ||
+                        "(server default)"}
+                    </code>
+                    . Actual checkpoint is labeled only after the worker confirms it — never
+                    treat requested as already-ran.
+                  </li>
+                  <li>
+                    <span className="text-alchemy-gold">Seed / variation:</span>{" "}
+                    {variationOf
+                      ? "This run is a variation — ACE-Step uses a new random seed."
+                      : "New generations use a random seed. Generate variation from Library prefills prompt/settings and rolls a new seed."}
+                  </li>
+                  <li>
+                    <span className="text-alchemy-gold">Planning:</span>{" "}
+                    {planningMode === "song-focus"
+                      ? plannerAvailable
+                        ? "Song focus (local planner, thinking on)"
+                        : "Song focus selected — unavailable (pick Direct)"
+                      : "Direct (thinking off)"}
+                  </li>
+                  <li>
+                    <span className="text-alchemy-gold">Post-FX:</span>{" "}
+                    {postFxPreset === "off"
+                      ? "Off (default)"
+                      : postFxPreset === "light"
+                        ? "Light polish"
+                        : "Loudness normalize"}
+                    {!health?.postprocess?.ffmpegAvailable && postFxPreset !== "off"
+                      ? " — ffmpeg missing, FX will skip"
+                      : ""}
+                  </li>
+                </ul>
+              </div>
+
               {/* Templates / packs */}
               {templates.length > 0 ? (
                 <div>
@@ -965,16 +1415,22 @@ export function CreateForm() {
                           className="w-full rounded-lg border border-alchemy-border bg-alchemy-bg px-2 py-1.5 text-sm text-alchemy-text disabled:opacity-60"
                         />
                       </label>
-                      <label className="flex items-center gap-2 sm:col-span-2 opacity-70">
+                      <label className="flex items-center gap-2 sm:col-span-2 opacity-80">
                         <input
                           type="checkbox"
                           disabled
-                          checked={false}
+                          checked={planningMode === "song-focus"}
                           readOnly
                           className="accent-alchemy-accent"
                         />
                         <span>
-                          Thinking mode forced off on local 10GB (batch stays 1)
+                          Thinking via Song focus only (local ACE planner/LM). Direct keeps
+                          thinking off. Batch stays 1.
+                          {planningMode === "song-focus"
+                            ? plannerAvailable
+                              ? " · Song focus selected"
+                              : " · Song focus selected but planner unavailable"
+                            : " · Direct (thinking off)"}
                         </span>
                       </label>
                     </div>
@@ -999,15 +1455,18 @@ export function CreateForm() {
         </section>
 
         {error ? (
-          <p className="mb-4 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
-            {error}
-          </p>
+          <div className="mb-4 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
+            <p>{error}</p>
+            {errorHint ? (
+              <p className="mt-1 text-xs text-alchemy-gold/90">{errorHint}</p>
+            ) : null}
+          </div>
         ) : null}
 
         <button
           type="submit"
           disabled={!canGenerate || Boolean(isOpen)}
-          className="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-alchemy-accent to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          className="aa-btn-primary"
         >
           {busy
             ? "Starting…"
@@ -1017,20 +1476,24 @@ export function CreateForm() {
                 ? "ACE-Step offline"
                 : aceBusy
                   ? "GPU busy"
-                  : "Generate"}
+                  : songFocusBlocked
+                    ? "Song focus unavailable"
+                    : "Generate"}
         </button>
       </form>
 
-      <aside className="rounded-2xl border border-alchemy-border bg-alchemy-surface/70 p-5 sm:p-6">
+      <aside className="aa-card p-5 sm:p-6" aria-live="polite">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-alchemy-muted">
           Result
         </h2>
         {!generation ? (
-          <p className="mt-4 text-sm text-alchemy-muted">
-            Your generation will appear here. Mock mode synthesizes a short
-            musical demo WAV so play and download work without an ACE-Step
-            server.
-          </p>
+          <div className="aa-empty mt-4">
+            <p>
+              Your generation will appear here. Mock mode synthesizes a short
+              musical demo WAV so play and download work without an ACE-Step
+              server.
+            </p>
+          </div>
         ) : (
           <div className="mt-4 space-y-4">
             <div>
@@ -1042,9 +1505,9 @@ export function CreateForm() {
                   ? ` · attempt ${generation.attemptCount}`
                   : ""}
               </p>
-              <CheckpointUsed generation={generation} />
+              <RunningModelLine generation={generation} />
               {generation.errorMessage ? (
-                <p className="mt-2 text-sm text-alchemy-danger">
+                <p className="mt-2 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
                   {generation.errorMessage}
                 </p>
               ) : null}
@@ -1058,14 +1521,14 @@ export function CreateForm() {
                 <div className="flex flex-wrap gap-2">
                   <a
                     href={`/api/audio/${generation.id}?download=1`}
-                    className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-text hover:border-alchemy-accent/50"
+                    className="aa-btn"
                   >
                     Download
                   </a>
                   <button
                     type="button"
                     onClick={() => router.push("/library")}
-                    className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-text hover:border-alchemy-accent/50"
+                    className="aa-btn"
                   >
                     Open library
                   </button>
@@ -1073,44 +1536,19 @@ export function CreateForm() {
                     type="button"
                     disabled={actionBusy}
                     onClick={() => void onDelete()}
-                    className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-muted hover:border-alchemy-danger/50 hover:text-alchemy-danger disabled:opacity-50"
+                    className="aa-btn-danger"
                   >
                     Delete
                   </button>
                 </div>
               </>
             ) : isOpen ? (
-              <div className="space-y-3">
-                <div className="rounded-xl border border-alchemy-border bg-alchemy-bg/50 p-3">
-                  <div className="flex items-center gap-2 text-sm text-alchemy-text">
-                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-alchemy-accent" />
-                    {progressLabel}
-                  </div>
-                  {generation.progressPct != null ? (
-                    <div className="mt-2">
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-alchemy-elevated">
-                        <div
-                          className="h-full rounded-full bg-alchemy-accent transition-all"
-                          style={{
-                            width: `${Math.min(100, Math.max(0, generation.progressPct))}%`,
-                          }}
-                        />
-                      </div>
-                      <p className="mt-1 text-xs text-alchemy-muted tabular-nums">
-                        {Math.round(generation.progressPct)}%
-                      </p>
-                    </div>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  disabled={actionBusy}
-                  onClick={() => void onCancel()}
-                  className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-text hover:border-alchemy-danger/50 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-              </div>
+              <GenerationProgress
+                generation={generation}
+                progressLabel={progressLabel}
+                actionBusy={actionBusy}
+                onCancel={() => void onCancel()}
+              />
             ) : (
               <div className="flex flex-wrap gap-2">
                 {(generation.status === "failed" ||
@@ -1119,7 +1557,7 @@ export function CreateForm() {
                     type="button"
                     disabled={actionBusy || aceUnhealthy}
                     onClick={() => void onRetry()}
-                    className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-text hover:border-alchemy-accent/50 disabled:opacity-50"
+                    className="aa-btn"
                   >
                     Retry
                   </button>
@@ -1128,7 +1566,7 @@ export function CreateForm() {
                   type="button"
                   disabled={actionBusy}
                   onClick={() => void onDelete()}
-                  className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-muted hover:border-alchemy-danger/50 hover:text-alchemy-danger disabled:opacity-50"
+                  className="aa-btn-danger"
                 >
                   Delete
                 </button>
@@ -1141,7 +1579,7 @@ export function CreateForm() {
   );
 }
 
-function CheckpointUsed({ generation }: { generation: Generation }) {
+function RunningModelLine({ generation }: { generation: Generation }) {
   const display = resolveDisplayModelLabel({
     requestedModelName: generation.requestedModelName ?? generation.modelName,
     actualModelName: generation.actualModelName,
@@ -1155,15 +1593,117 @@ function CheckpointUsed({ generation }: { generation: Generation }) {
       : generation.preset === "quality"
         ? "Quality"
         : null;
-  const parts: string[] = [];
-  if (presetLabel) parts.push(presetLabel);
-  if (generation.provider) parts.push(generation.provider);
-  parts.push(display.detail);
+  const providerLabel = generation.provider
+    ? generation.provider === "local"
+      ? "local"
+      : generation.provider === "remote"
+        ? "remote"
+        : generation.provider
+    : null;
+
   return (
-    <p className="mt-1 text-xs text-alchemy-muted">
-      {display.confirmed ? "Checkpoint used" : "Checkpoint"}:{" "}
-      <span className="font-medium text-alchemy-text">{parts.join(" · ")}</span>
-    </p>
+    <div className="mt-2 space-y-1 text-xs text-alchemy-muted">
+      <p>
+        {display.confirmed ? (
+          <>
+            <span className="text-alchemy-success">Running / used</span>
+            {": "}
+            <span className="font-medium text-alchemy-text">
+              {[presetLabel, providerLabel, display.detail].filter(Boolean).join(" · ")}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="text-alchemy-gold">Requested</span>
+            {": "}
+            <span className="font-medium text-alchemy-text">
+              {[presetLabel, providerLabel, display.detail].filter(Boolean).join(" · ")}
+            </span>
+            <span className="mt-0.5 block text-[11px] text-alchemy-muted/90">
+              Actual model/provider is shown only after the worker confirms it — never
+              treated as the model that already ran.
+            </span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+function GenerationProgress({
+  generation,
+  progressLabel,
+  actionBusy,
+  onCancel,
+}: {
+  generation: Generation;
+  progressLabel: string | null;
+  actionBusy: boolean;
+  onCancel: () => void;
+}) {
+  const display = resolveDisplayModelLabel({
+    requestedModelName: generation.requestedModelName ?? generation.modelName,
+    actualModelName: generation.actualModelName,
+    requestedCapability: generation.requestedCapability,
+    actualCapability: generation.actualCapability,
+    status: generation.status,
+  });
+  const stage = generation.stage || (generation.status === "pending" ? "queued" : "processing");
+  const pct =
+    generation.progressPct != null
+      ? Math.min(100, Math.max(0, generation.progressPct))
+      : null;
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-alchemy-accent/30 bg-alchemy-bg/60 p-4 shadow-glow-accent">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm text-alchemy-text">
+            <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-alchemy-accent" />
+            <span className="font-medium">{progressLabel || "Generating…"}</span>
+          </div>
+          {pct != null ? (
+            <span className="text-xs tabular-nums text-alchemy-muted">{Math.round(pct)}%</span>
+          ) : null}
+        </div>
+        <dl className="mt-3 grid gap-1.5 font-mono text-[11px] text-alchemy-muted sm:grid-cols-2">
+          <div>
+            <dt className="inline text-alchemy-muted/80">Stage · </dt>
+            <dd className="inline text-alchemy-text">{stage}</dd>
+          </div>
+          <div>
+            <dt className="inline text-alchemy-muted/80">Status · </dt>
+            <dd className="inline text-alchemy-gold">{generation.status}</dd>
+          </div>
+          <div className="sm:col-span-2">
+            <dt className="inline text-alchemy-muted/80">
+              {display.confirmed ? "Actual · " : "Requested · "}
+            </dt>
+            <dd className="inline text-alchemy-text">
+              {[generation.provider, display.detail].filter(Boolean).join(" · ") || "—"}
+            </dd>
+          </div>
+        </dl>
+        <div className="mt-3">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-alchemy-elevated">
+            <div
+              className={`h-full rounded-full bg-gen-gradient transition-all ${
+                pct == null ? "w-1/3 animate-pulse" : ""
+              }`}
+              style={pct != null ? { width: `${pct}%` } : undefined}
+            />
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        disabled={actionBusy}
+        onClick={onCancel}
+        className="aa-btn-danger"
+      >
+        {actionBusy ? "Cancelling…" : "Cancel"}
+      </button>
+    </div>
   );
 }
 
@@ -1178,7 +1718,7 @@ function GpuStatusPanel({
 }) {
   if (loading || !health) {
     return (
-      <div className="mb-4 rounded-lg border border-alchemy-border bg-alchemy-bg/40 px-3 py-2 text-xs text-alchemy-muted">
+      <div className="mb-4 rounded-lg border border-alchemy-border bg-alchemy-bg/50 px-3 py-2 font-mono text-[11px] text-alchemy-muted sm:text-xs">
         Checking local ACE / GPU status…
       </div>
     );
@@ -1187,7 +1727,7 @@ function GpuStatusPanel({
   const fast = health.presets?.items?.find((x) => x.id === "fast");
   const quality = health.presets?.items?.find((x) => x.id === "quality");
   return (
-    <div className="mb-4 rounded-lg border border-alchemy-border bg-alchemy-bg/40 px-3 py-2 text-xs text-alchemy-muted">
+    <div className="mb-4 rounded-lg border border-alchemy-border bg-alchemy-bg/50 px-3 py-2 font-mono text-[11px] leading-relaxed text-alchemy-muted sm:text-xs">
       <p>
         Local ACE:{" "}
         <span className={aceUp ? "text-alchemy-success font-medium" : "text-alchemy-danger font-medium"}>

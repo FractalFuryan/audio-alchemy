@@ -63,6 +63,7 @@ export interface AceStepClientConfig {
 
 export interface AceStepClient {
   health(): Promise<boolean>;
+  healthInfo(): Promise<AceStepHealthInfo>;
   releaseTask(params: AceStepGenerateParams): Promise<AceStepTaskCreated>;
   queryResult(taskIds: string[]): Promise<AceStepPollResult[]>;
   downloadAudio(fileUrlOrPath: string): Promise<{ buffer: Buffer; mime: string }>;
@@ -72,6 +73,13 @@ export interface AceStepClient {
     params: AceStepGenerateParams,
     options?: { timeoutMs?: number; pollIntervalMs?: number }
   ): Promise<{ buffer: Buffer; mime: string; taskId: string; metadata?: AceStepResultMetadata }>;
+}
+
+/** Safe subset of ACE-Step health data used for local capability checks. */
+export interface AceStepHealthInfo {
+  connected: boolean;
+  loadedModel: string | null;
+  loadedLmModel: string | null;
 }
 
 type ApiEnvelope<T> = {
@@ -315,16 +323,28 @@ export function createAceStepClient(config: AceStepClientConfig): AceStepClient 
     return json as T;
   }
 
-  async function health(): Promise<boolean> {
+  async function healthInfo(): Promise<AceStepHealthInfo> {
     try {
       const res = await fetchFn(joinUrl(config.baseUrl, "/health"), {
         headers: authHeaders(),
       });
-      if (!res.ok) return false;
-      return true;
+      if (!res.ok) {
+        return { connected: false, loadedModel: null, loadedLmModel: null };
+      }
+      const data = await parseEnvelope<unknown>(res);
+      const root = asRecord(data);
+      return {
+        connected: true,
+        loadedModel: root ? pickString(root, ["loaded_model", "loadedModel"]) ?? null : null,
+        loadedLmModel: root ? pickString(root, ["loaded_lm_model", "loadedLmModel"]) ?? null : null,
+      };
     } catch {
-      return false;
+      return { connected: false, loadedModel: null, loadedLmModel: null };
     }
+  }
+
+  async function health(): Promise<boolean> {
+    return (await healthInfo()).connected;
   }
 
   async function releaseTask(params: AceStepGenerateParams): Promise<AceStepTaskCreated> {
@@ -510,7 +530,7 @@ export function createAceStepClient(config: AceStepClientConfig): AceStepClient 
     }
   }
 
-  return { health, releaseTask, queryResult, downloadAudio, generateAndWait, listModels };
+  return { health, healthInfo, releaseTask, queryResult, downloadAudio, generateAndWait, listModels };
 
 }
 

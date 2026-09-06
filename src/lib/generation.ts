@@ -33,22 +33,27 @@ import {
   listOpenGenerations,
   listGenerationsByStatus,
   deleteGenerationRow,
+  getCollection,
 } from "./db";
+import { serializeUserTags, normalizeTagList } from "./library-meta";
 import { getAudioDir } from "./paths";
 import { synthesizeMockWav } from "./wav";
-import type { CreateGenerationInput, Generation, GenerationMode } from "./types";
+import type { CreateGenerationInput, Generation, GenerationMode, PlanningMode } from "./types";
+import { getGenerationMode } from "./generation-mode";
 import { titleFromPrompt } from "./title";
-import { maybePostprocessAudio } from "./postprocess";
+import { formatActionableError } from "./user-errors";
+import { maybePostprocessAudio, parsePostFxPreset } from "./postprocess";
+import { compileMusicBrief, parsePlanningMode, thinkingForPlanningMode } from "./prompt-compiler";
+import {
+  plannerFromModelsProbe,
+} from "./models-probe";
 
 const MOCK_STALE_MS = 30_000;
 
 /** In-process single-flight guard while release_task is in flight (protects 10GB VRAM). */
 let aceStepSubmitInFlight = false;
 
-export function getGenerationMode(): GenerationMode {
-  const mode = (process.env.GENERATION_MODE || "mock").toLowerCase();
-  return mode === "ace-step" ? "ace-step" : "mock";
-}
+export { getGenerationMode } from "./generation-mode";
 
 function createAceClient() {
   const ep = getLocalEndpoint();
@@ -108,6 +113,23 @@ function stylePromptFor(gen: Generation): string {
 }
 
 /**
+ * Prompt text sent to ACE-Step.
+ * Direct: style + prompt (legacy path).
+ * Song focus: music brief only (style already folded by compiler; avoid duplication).
+ */
+function aceSubmitPromptFor(gen: Generation): string {
+  if (gen.planningMode === "song-focus") {
+    const brief = (gen.musicBrief || gen.prompt || "").trim();
+    return brief;
+  }
+  return stylePromptFor(gen);
+}
+
+function wantsSongFocusThinking(gen: Generation): boolean {
+  return thinkingForPlanningMode(gen.planningMode);
+}
+
+/**
  * True when another ACE-Step job is open (pending/processing), optionally excluding one id.
  * Used for single-flight: only one GPU job at a time on 10GB VRAM.
  */
@@ -122,6 +144,11 @@ export function isAceStepBusy(excludeId?: string): boolean {
  * Reject if another ace-step job is already processing / submitting.
  * Documented single-flight queue for RTX 3080 10GB VRAM protection.
  */
+function toUserErrorMessage(err: unknown): string {
+  const a = formatActionableError(err);
+  return a.hint ? `${a.message} — ${a.hint}` : a.message;
+}
+
 export function assertAceStepSingleFlight(excludeId?: string): void {
   if (!isAceStepBusy(excludeId)) return;
   const other = listOpenGenerations().find(
@@ -156,6 +183,7 @@ async function completeMockInRequest(gen: Generation): Promise<Generation> {
   const pp = await maybePostprocessAudio({
     absPath: abs,
     mime: audioMime,
+    preset: gen.postFxPreset,
     onStage: (message, pct) => {
       updateGeneration(gen.id, {
         status: "processing",
@@ -208,13 +236,14 @@ async function submitAceStepTask(
 
   // Local non-XL: still enforce preset resolution + local availability
   if (route.provider === "local") {
+    const useThinking = wantsSongFocusThinking(gen);
     const settings = resolveInferenceFromPreset({
       preset: presetId,
       model: overrides?.model || route.model,
       inferenceSteps: overrides?.inferenceSteps ?? route.inferenceSteps,
       audioFormat: overrides?.audioFormat,
       batchSize: 1,
-      thinking: false,
+      thinking: useThinking,
     });
     await assertModelAvailableOrThrow(settings.model);
     route = { ...route, model: settings.model || route.model };
@@ -241,14 +270,16 @@ async function submitAceStepTask(
       );
     }
 
+    const useThinking = wantsSongFocusThinking(gen);
     const created = await client.releaseTask({
-      prompt: stylePromptFor(gen),
+      prompt: aceSubmitPromptFor(gen),
       lyrics: gen.lyrics || undefined,
       durationSec: gen.durationSec,
       audioFormat,
       batchSize: 1,
       inferenceSteps,
-      thinking: false,
+      // Song focus only — never silently claim thinking without planningMode
+      thinking: useThinking,
       model: route.model,
     });
 
@@ -289,6 +320,31 @@ export async function createGeneration(input: CreateGenerationInput): Promise<Ge
   const now = new Date().toISOString();
 
   const presetId = parsePresetId(input.preset) ?? undefined;
+  const postFxPreset = parsePostFxPreset(input.postFxPreset) ?? "off";
+
+  const planningMode: PlanningMode =
+    parsePlanningMode(input.planningMode) ?? "direct";
+  const songFocus = planningMode === "song-focus";
+
+  // Resolve music brief for Song focus (deterministic compiler if client omitted).
+  let musicBrief: string | null = null;
+  let originalPrompt: string | null = null;
+  if (songFocus) {
+    originalPrompt = prompt;
+    const provided = input.musicBrief?.trim();
+    if (provided) {
+      musicBrief = provided;
+    } else {
+      musicBrief = compileMusicBrief({
+        prompt,
+        style: input.style,
+        lyrics: input.lyrics,
+      }).musicBrief;
+    }
+    if (!musicBrief?.trim()) {
+      throw new Error("Song focus requires a music brief");
+    }
+  }
 
   const overrides: AceStepSettingsOverrides | undefined = {
     ...(input.model != null ? { model: input.model } : {}),
@@ -297,7 +353,8 @@ export async function createGeneration(input: CreateGenerationInput): Promise<Ge
       : {}),
     ...(input.audioFormat != null ? { audioFormat: input.audioFormat } : {}),
     batchSize: 1,
-    thinking: false,
+    // thinking:true only when Song focus explicitly selected
+    thinking: songFocus,
   };
 
   // Resolve early so XL / missing-model / remote-unavailable errors happen before insert.
@@ -309,6 +366,20 @@ export async function createGeneration(input: CreateGenerationInput): Promise<Ge
   try {
     if (mode === "ace-step") {
       const probe = await probeModels();
+      if (songFocus) {
+        const aceHealth = await getAceStepHealthInfo();
+        const planner = plannerFromModelsProbe(probe, {
+          mode,
+          aceConnected: aceHealth.connected,
+          loadedLmModel: aceHealth.loadedLmModel,
+        });
+        if (!planner.available) {
+          throw new Error(
+            planner.reason ||
+              "Song focus is unavailable — local ACE planner/LM not confirmed. Choose Direct."
+          );
+        }
+      }
       const route = resolveAceRoute({
         preset: presetId ?? "fast",
         modelOverride: overrides.model,
@@ -331,6 +402,11 @@ export async function createGeneration(input: CreateGenerationInput): Promise<Ge
       }
       assertAceStepSingleFlight();
     } else {
+      if (songFocus) {
+        throw new Error(
+          "Song focus requires ACE-Step mode with a local planner/LM. Choose Direct or connect ACE-Step."
+        );
+      }
       const resolved = resolveInferenceFromPreset({
         preset: presetId,
         ...overrides,
@@ -380,6 +456,13 @@ export async function createGeneration(input: CreateGenerationInput): Promise<Ge
     generationMs: null,
     audioDurationSec: null,
     resultJson: null,
+    favorite: false,
+    userTags: null,
+    collectionId: null,
+    postFxPreset,
+    planningMode,
+    originalPrompt,
+    musicBrief,
   };
   insertGeneration(gen);
 
@@ -395,7 +478,7 @@ export async function createGeneration(input: CreateGenerationInput): Promise<Ge
     void reconcileGeneration(submitted.id).catch(() => undefined);
     return submitted;
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Generation failed";
+    const message = toUserErrorMessage(err);
     const failed = updateGeneration(gen.id, {
       status: "failed",
       stage: "failed",
@@ -523,7 +606,7 @@ export async function reconcileGeneration(id: string): Promise<Generation | null
     }
 
     if (item.status === 2) {
-      const message = item.error || "ACE-Step generation failed";
+      const message = toUserErrorMessage(item.error || "ACE-Step generation failed");
       return (
         updateGeneration(gen.id, {
           status: "failed",
@@ -559,6 +642,7 @@ export async function reconcileGeneration(id: string): Promise<Generation | null
       const pp = await maybePostprocessAudio({
         absPath: abs,
         mime: audioMime,
+        preset: gen.postFxPreset,
         onStage: (message, pct) => {
           updateGeneration(gen.id, {
             status: "processing",
@@ -723,7 +807,7 @@ export async function retryGeneration(id: string): Promise<Generation> {
     void reconcileGeneration(submitted.id).catch(() => undefined);
     return submitted;
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Retry failed";
+    const message = toUserErrorMessage(err);
     const failed = updateGeneration(id, {
       status: "failed",
       stage: "failed",
@@ -779,10 +863,42 @@ export function resolveAudioAbsolutePath(gen: Generation): string | null {
   return abs;
 }
 
+
+export async function setGenerationFavorite(
+  id: string,
+  favorite: boolean
+): Promise<Generation | null> {
+  return updateGeneration(id, { favorite: Boolean(favorite) });
+}
+
+export async function setGenerationUserTags(
+  id: string,
+  tags: string[]
+): Promise<Generation | null> {
+  return updateGeneration(id, {
+    userTags: serializeUserTags(normalizeTagList(tags)),
+  });
+}
+
+export async function setGenerationCollection(
+  id: string,
+  collectionId: string | null
+): Promise<Generation | null> {
+  if (collectionId) {
+    const col = getCollection(collectionId);
+    if (!col) throw new Error("Collection not found");
+  }
+  return updateGeneration(id, { collectionId });
+}
+
 export async function checkAceStepHealth(): Promise<boolean> {
   try {
-    return await createAceClient().health();
+    return (await getAceStepHealthInfo()).connected;
   } catch {
     return false;
   }
+}
+
+export async function getAceStepHealthInfo() {
+  return createAceClient().healthInfo();
 }

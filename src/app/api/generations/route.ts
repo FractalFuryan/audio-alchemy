@@ -7,8 +7,11 @@ import {
 } from "@/lib/generation";
 import { parseAceStepOverridesFromBody } from "@/lib/ace-step-settings";
 import { parsePresetId, PresetResolutionError } from "@/lib/presets";
+import { parsePostFxPreset } from "@/lib/postprocess";
+import { parsePlanningMode } from "@/lib/prompt-compiler";
 import { AceRouteError } from "@/lib/ace-provider";
 import type { GenerationSort, GenerationStatus, ListGenerationsQuery } from "@/lib/types";
+import { formatActionableError } from "@/lib/user-errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,7 +51,23 @@ function parseListQuery(req: NextRequest): ListGenerationsQuery {
   const sort =
     sortRaw && ALLOWED_SORTS.has(sortRaw) ? sortRaw : undefined;
 
-  return { q, status, sort };
+  const favoriteRaw = sp.get("favorite");
+  const favorite =
+    favoriteRaw === "1" || favoriteRaw === "true"
+      ? true
+      : undefined;
+
+  const collectionRaw = sp.get("collection");
+  let collectionId: string | null | undefined;
+  if (collectionRaw === "none" || collectionRaw === "") {
+    collectionId = "none";
+  } else if (collectionRaw) {
+    collectionId = collectionRaw;
+  }
+
+  const tag = sp.get("tag")?.trim() || undefined;
+
+  return { q, status, sort, favorite, collectionId, tag };
 }
 
 export async function GET(req: NextRequest) {
@@ -58,8 +77,11 @@ export async function GET(req: NextRequest) {
     const items = listGenerations(query);
     return NextResponse.json({ generations: items });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to list generations";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const a = formatActionableError(err);
+    return NextResponse.json(
+      { error: a.message, code: a.code, hint: a.hint },
+      { status: 500 }
+    );
   }
 }
 
@@ -71,10 +93,18 @@ export async function POST(req: NextRequest) {
     const style = typeof body.style === "string" ? body.style : undefined;
     const title = typeof body.title === "string" ? body.title : undefined;
     const durationSec = Number(body.durationSec ?? body.duration ?? 60);
+    const variationOf =
+      typeof body.variationOf === "string" ? body.variationOf : undefined;
 
-    // Optional Advanced overrides — applied server-side only (never browser env secrets).
-    const overrides = parseAceStepOverridesFromBody(body);
+    const overrides = parseAceStepOverridesFromBody(body) ?? {};
     const preset = parsePresetId(body.preset);
+    const postFxPreset = parsePostFxPreset(body.postFxPreset) ?? undefined;
+    const planningMode = parsePlanningMode(body.planningMode) ?? "direct";
+    const musicBrief =
+      typeof body.musicBrief === "string" ? body.musicBrief : undefined;
+
+    // Song focus forces thinking:true; Direct forces false (no silent claim).
+    overrides.thinking = planningMode === "song-focus";
 
     const gen = await createGeneration({
       prompt,
@@ -83,24 +113,33 @@ export async function POST(req: NextRequest) {
       title,
       durationSec,
       ...(preset ? { preset } : {}),
+      ...(postFxPreset != null ? { postFxPreset } : {}),
+      ...(variationOf ? { variationOf } : {}),
+      planningMode,
+      ...(musicBrief != null ? { musicBrief } : {}),
       ...overrides,
+      thinking: planningMode === "song-focus",
     });
     return NextResponse.json({ generation: gen }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to create generation";
+    const a = formatActionableError(err);
     const withGen = err as Error & { generation?: unknown };
     let status = 500;
     if (err instanceof PresetResolutionError) status = err.status;
     else if (err instanceof AceRouteError) status = err.status;
-    else if (message.includes("required")) status = 400;
-    else if (/not available|not supported|XL checkpoint/i.test(message)) status = 400;
-    else if (/busy|single-flight/i.test(message)) status = 409;
-    else if (/unreachable|ACE-Step/i.test(message) && getGenerationMode() === "ace-step") {
+    else if (a.code === "validation") status = 400;
+    else if (a.code === "model_unavailable") status = 400;
+    else if (a.code === "gpu_busy") status = 409;
+    else if (a.code === "ace_offline" && getGenerationMode() === "ace-step") {
       status = 503;
+    } else if (a.code === "disk_full" || a.code === "write_failed") {
+      status = 507;
     }
     return NextResponse.json(
       {
-        error: message,
+        error: a.message,
+        code: a.code,
+        hint: a.hint,
         ...(withGen.generation ? { generation: withGen.generation } : {}),
       },
       { status }

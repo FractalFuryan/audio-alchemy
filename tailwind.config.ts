@@ -8,17 +8,20 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      backgroundImage: {
+        "gen-gradient": "linear-gradient(90deg, #a876ff 0%, #e6b84d 100%)",
+      },
       colors: {
         alchemy: {
-          bg: "#0a0a0f",
-          surface: "#12121a",
-          elevated: "#1a1a26",
-          border: "#2a2a3a",
-          muted: "#8b8b9e",
-          text: "#f0f0f5",
-          accent: "#a78bfa",
-          accentHover: "#c4b5fd",
-          gold: "#fbbf24",
+          bg: "#0c0812",
+          surface: "#171020",
+          elevated: "#21152d",
+          border: "#3b284d",
+          muted: "#aca0b9",
+          text: "#f7f1fb",
+          accent: "#a876ff",
+          accentHover: "#cfb5ff",
+          gold: "#e6b84d",
           success: "#34d399",
           danger: "#f87171",
         },

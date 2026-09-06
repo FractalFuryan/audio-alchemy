@@ -22,8 +22,15 @@ import {
 import {
   ffmpegAvailable,
   ffmpegBin,
+  ffmpegMissingHint,
   isPostprocessEnabled,
+  resolvePostFxPreset,
 } from "./postprocess";
+import {
+  plannerAvailabilityToSafeJson,
+  resolvePlannerAvailability,
+  type PlannerAvailability,
+} from "./ace-planner";
 
 export interface ModelProbeItem {
   id: string;
@@ -42,6 +49,31 @@ export interface ModelsProbeResult {
   inventory?: ProviderInventory;
   capabilities?: AceCapabilityStatus[];
   providers?: ReturnType<typeof getProviderSafeSummary>;
+}
+
+/** Derive Song focus planner availability from a models probe + ACE health. */
+export function plannerFromModelsProbe(
+  models: ModelsProbeResult,
+  opts: { mode: "mock" | "ace-step"; aceConnected: boolean; loadedLmModel?: string | null }
+): PlannerAvailability {
+  const localIds = (models.items || [])
+    .filter((m) => m.provider !== "remote")
+    .map((m) => m.id);
+  if (opts.loadedLmModel?.trim()) localIds.push(opts.loadedLmModel.trim());
+  const liveLocalInventory =
+    (models.source === "ace-step:/v1/models" || models.source === "multi-provider") &&
+    localIds.length > 0 &&
+    Boolean(models.inventory?.local?.reachable);
+  return resolvePlannerAvailability({
+    mode: opts.mode,
+    aceConnected: opts.aceConnected,
+    localModelIds: localIds,
+    liveLocalInventory,
+  });
+}
+
+export function safePlannerJson(p: PlannerAvailability): Record<string, unknown> {
+  return plannerAvailabilityToSafeJson(p);
 }
 
 function toItem(id: string, provider: "local" | "remote" = "local"): ModelProbeItem {
@@ -182,24 +214,43 @@ export function presetReadiness(
 }
 
 export function getPostprocessHealth() {
-  const enabled = isPostprocessEnabled();
+  const envEnabled = isPostprocessEnabled();
   const available = ffmpegAvailable();
   const bin = ffmpegBin();
   const fromEnv = Boolean((process.env.FFMPEG_PATH || "").trim());
+  const envDefaultPreset = resolvePostFxPreset(null);
   let hint: string | null = null;
-  if (enabled && !available) {
-    hint =
-      "POSTPROCESS is on but ffmpeg was not found. On Windows set FFMPEG_PATH to ffmpeg.exe (WSL ffmpeg is not visible to Windows Node). Post-FX will be skipped.";
-  } else if (enabled && available) {
+  if (!available) {
+    hint = ffmpegMissingHint();
+  } else if (envEnabled) {
     hint = fromEnv
-      ? "Post-FX enabled via FFMPEG_PATH."
-      : "Post-FX enabled; using ffmpeg from PATH.";
+      ? `Env POSTPROCESS on (default ${envDefaultPreset}) via FFMPEG_PATH.`
+      : `Env POSTPROCESS on (default ${envDefaultPreset}); using ffmpeg from PATH.`;
+  } else {
+    hint = fromEnv
+      ? "ffmpeg available via FFMPEG_PATH. Post-FX is optional and off by default in Create."
+      : "ffmpeg available on PATH. Post-FX is optional and off by default in Create.";
   }
   return {
-    enabled,
+    enabled: envEnabled,
     ffmpegAvailable: available,
     ffmpegPathConfigured: fromEnv,
     ffmpegBin: fromEnv ? bin : available ? "ffmpeg" : null,
+    defaultPreset: "off" as const,
+    envDefaultPreset,
+    presets: [
+      { id: "off" as const, label: "Off", description: "No post-FX (default)." },
+      {
+        id: "light" as const,
+        label: "Light polish",
+        description: "High-pass + gentle presence EQ + soft true-peak limit.",
+      },
+      {
+        id: "loudness" as const,
+        label: "Loudness normalize",
+        description: "loudnorm to env targets + true-peak limit.",
+      },
+    ],
     hint,
   };
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -13,13 +14,20 @@ export function Header() {
   const pathname = usePathname();
 
   return (
-    <header className="border-b border-alchemy-border/80 bg-alchemy-bg/70 backdrop-blur-md sticky top-0 z-40">
+    <header className="sticky top-0 z-40 border-b border-alchemy-gold/15 bg-alchemy-bg/75 backdrop-blur-md">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-4">
         <Link href="/" className="group flex items-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-alchemy-accent to-violet-700 text-sm font-bold text-white shadow-lg shadow-violet-900/40">
-            AA
+          <span className="inline-flex h-10 w-8 shrink-0 items-center justify-center overflow-hidden">
+            <Image
+              src="/brand/audio-alchemy-mark.png"
+              alt="Audio Alchemy"
+              width={280}
+              height={493}
+              className="h-10 w-auto drop-shadow-[0_0_8px_rgba(230,184,77,0.25)]"
+              priority
+            />
           </span>
-          <span className="text-lg font-semibold tracking-tight text-alchemy-text group-hover:text-alchemy-accentHover transition-colors">
+          <span className="bg-gradient-to-r from-alchemy-text via-alchemy-text to-alchemy-gold bg-clip-text text-lg font-semibold tracking-tight text-transparent transition-opacity group-hover:opacity-90">
             Audio Alchemy
           </span>
         </Link>
@@ -35,8 +43,8 @@ export function Header() {
                 href={link.href}
                 className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
                   active
-                    ? "bg-alchemy-elevated text-alchemy-text"
-                    : "text-alchemy-muted hover:text-alchemy-text hover:bg-alchemy-elevated/60"
+                    ? "border border-alchemy-gold/20 bg-alchemy-gold/10 text-alchemy-gold"
+                    : "border border-transparent text-alchemy-muted hover:border-alchemy-border hover:bg-alchemy-elevated/60 hover:text-alchemy-text"
                 }`}
               >
                 {link.label}

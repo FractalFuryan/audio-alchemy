@@ -4,6 +4,16 @@
 
 :root {
   color-scheme: dark;
+  --aa-bg: #120715;
+  --aa-surface: #1a0f22;
+  --aa-elevated: #24162f;
+  --aa-border: #3a2748;
+  --aa-muted: #a89bb8;
+  --aa-text: #f5f0fa;
+  --aa-accent: #8b5cf6;
+  --aa-gold: #d4af37;
+  --aa-success: #34d399;
+  --aa-danger: #f87171;
 }
 
 html,
@@ -12,10 +22,56 @@ body {
 }
 
 body {
-  background: radial-gradient(1200px 600px at 10% -10%, #1a1030 0%, transparent 55%),
-    radial-gradient(900px 500px at 90% 0%, #0f1a2e 0%, transparent 50%),
-    #0a0a0f;
-  color: #f0f0f5;
+  background:
+    radial-gradient(1100px 560px at 12% -8%, #2a1040 0%, transparent 55%),
+    radial-gradient(900px 480px at 92% 0%, #1a0a28 0%, transparent 50%),
+    radial-gradient(700px 400px at 50% 100%, #1a0820 0%, transparent 45%),
+    var(--aa-bg);
+  color: var(--aa-text);
+}
+
+::selection {
+  background: rgba(230, 184, 77, 0.35);
+  color: #fffaf0;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(139, 92, 246, 0.85);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
+  outline: none;
+}
+
+@layer components {
+  .aa-card {
+    @apply rounded-2xl border border-alchemy-border bg-alchemy-surface/90 shadow-xl shadow-black/30;
+  }
+
+  .aa-btn {
+    @apply inline-flex items-center justify-center rounded-xl border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-text transition hover:border-alchemy-accent/50 focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .aa-btn-danger {
+    @apply inline-flex items-center justify-center rounded-xl border border-alchemy-border bg-alchemy-elevated px-3 py-2 text-sm text-alchemy-muted transition hover:border-alchemy-danger/50 hover:text-alchemy-danger focus-visible:ring-2 focus-visible:ring-alchemy-danger/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .aa-btn-primary {
+    @apply inline-flex w-full items-center justify-center rounded-xl bg-gen-gradient px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-950/40 transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-alchemy-gold/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .aa-input {
+    @apply w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60;
+  }
+
+  .aa-empty {
+    @apply rounded-2xl border border-dashed border-alchemy-border/80 bg-alchemy-surface/40 px-5 py-8 text-center text-sm text-alchemy-muted;
+  }
 }
 
 @layer utilities {
