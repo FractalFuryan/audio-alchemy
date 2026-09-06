@@ -1,6 +1,14 @@
 # Audio Alchemy
 
-Ownership-first AI music generation. Create tracks from a prompt, organize them in a local library, and connect to an ACE-Step 1.5 generation service when configured.
+Audio Alchemy is a **local-first, ownership-first music-generation MVP** built around an optional [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) service.
+
+- **Mock** works without a GPU so the product flow can be explored end to end; its synthesized demo audio is not representative of model quality.
+- **Quality** uses a verified local ACE-Step SFT checkpoint when one is installed and is the preferred local setting.
+- **Fast** uses a verified Turbo checkpoint for quicker drafts.
+- Output capability and quality depend on the model and worker you configure. This project does **not** claim Suno-equivalent quality.
+- Prompts and templates avoid artist names and artist imitation.
+- “You own your generations” is an Audio Alchemy product policy, not legal advice; applicable law and third-party model terms still matter.
+- The owner’s home GPU is private development hardware and must never be exposed or routed to as public compute.
 
 ## Features
 
@@ -18,20 +26,34 @@ Next.js App Router, TypeScript, Tailwind CSS, React, better-sqlite3.
 
 ## Quick start
 
+macOS/Linux:
+
 ```bash
 cp .env.example .env.local
 npm install
 npm run dev
 ```
 
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env.local
+npm.cmd install
+npm.cmd run dev
+```
+
+Use `npm.cmd` as the Windows fallback when PowerShell blocks the `npm.ps1` script under its execution policy.
+
 Open http://localhost:3000
 
 Production build:
 
-```bash
+```text
 npm run build
 npm start
 ```
+
+On Windows, the equivalents are `npm.cmd run build` and `npm.cmd start`.
 
 ## Environment
 
@@ -101,7 +123,7 @@ Best-effort TypeScript client in `src/lib/ace-step-client.ts`:
 
 ## License notes
 
-This app code is an MVP scaffold. ACE-Step upstream licensing is MIT / commercial-friendly per their project — always re-check the license and model cards for the checkpoints you run. Nothing on the Ownership page is legal advice.
+Audio Alchemy’s original application source is available under the [MIT License](LICENSE). That license applies only to source owned by this project; it does not relicense ACE-Step, model checkpoints, npm packages, platform SDKs, or connected services. Review [Third-party notices](THIRD_PARTY_NOTICES.md) and the current upstream terms before use. Ownership-page language remains product policy, not legal advice.
 
 ## Progressive Web App (PWA)
 
@@ -122,26 +144,11 @@ Dev server skips service worker registration.
 
 ## Desktop (Tauri 2)
 
-Shell in src-tauri/. Product name Audio Alchemy. Id com.audioalchemy.app.
-Dev loads local Next on port 3000 (see package.json scripts).
-SQLite stays in the Node process.
-
-Scripts: tauri:dev and tauri:build.
-Windows host + WebView2 for shipping desktop binaries. Linux verifies scaffold only.
+`src-tauri/` is an **exploratory desktop shell**, not a polished or supported release. It currently loads the Next.js application while SQLite remains in the Node process. Packaging, sidecar lifecycle, updates, signing, release CI, and installer support remain future work.
 
 ## Mobile (Capacitor)
 
-UI shell only. Phones must use a hosted Next API URL — no on-device SQLite or ACE-Step.
-Set CAPACITOR_SERVER_URL or edit server.url in capacitor.config.ts, then:
-
-```
-npm run cap:sync
-npm run cap:android
-npm run cap:ios
-```
-
-URL examples: Codespace port forward, ngrok/cloudflared tunnel, deployed host,
-Android emulator http://10.0.2.2:3000, or adb reverse to localhost:3000.
+`android/`, `ios/`, and `capacitor.config.ts` are **exploratory mobile shells**, not polished or supported releases. They do not run SQLite or ACE-Step on-device and would require a deliberately hosted, secured API. Hosted infrastructure and mobile-client work are deferred until the audio-quality gate is evaluated.
 
 ## Architecture
 

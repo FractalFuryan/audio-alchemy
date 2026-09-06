@@ -40,6 +40,10 @@ Before inviting external users onto hosted workers:
 4. See HOSTING_BOUNDARY.md for auth, isolation, quotas, and compute separation.
 5. Ownership / local-mode messaging remains accurate for any remaining local path.
 
+### Remote XL decision
+
+Remote XL remains evaluation-only until it wins a documented, reproducible listening comparison against the verified local SFT baseline. Record the prompts, model identifiers, generation settings, blinded preference results, failure rate, and latency. Until this gate has been evaluated, do not build hosted authentication, multi-tenant queues, billing, or supported mobile clients.
+
 ## Local today
 
 Continue using the local eval scripts on this machine.

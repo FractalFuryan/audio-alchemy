@@ -1,5 +1,7 @@
 # Remote XL evaluation path (optional)
 
+**Status: evaluation-only.** XL is not a production tier and must not be marketed or enabled as one until it wins the documented listening gate in `QUALITY_GATES.md` against the verified local SFT baseline.
+
 ## Purpose
 
 App-side support for evaluating ACE-Step **XL** checkpoints on a **20–24GB** (or larger) GPU via a **configured endpoint URL**. This is an optional, pull/client-outbound path. It does not create cloud accounts, billing, queues, or GPU infrastructure, and it never turns local development hardware into public shared compute.

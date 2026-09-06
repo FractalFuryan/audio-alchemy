@@ -81,11 +81,11 @@ Jobs survive process restarts by persisting `external_task_id` and reconciling o
 
 Env-driven inference settings, single-flight GPU jobs, safe `/api/health` (no secrets), path/metadata hardening in the ACE-Step client.
 
-## Installable app scope (Phase E — done)
+## Exploratory client shells (Phase E scaffold)
 
 1. **PWA**: Manifest id/scope, maskable icon, branded icons, SW v2 (no `/api` cache), production SW registration.
-2. **Tauri 2**: `productName` Audio Alchemy, id `com.audioalchemy.app`, `label: main`, `beforeDevCommand`/`devUrl` for local Next, corrected icon set.
-3. **Capacitor**: Hosted-URL comments + `CAPACITOR_SERVER_URL`, android/ios scaffolds, cleartext for local tunnels.
+2. **Tauri 2**: exploratory desktop scaffold only; packaging, signing, updates, sidecar lifecycle, and release support are future work.
+3. **Capacitor**: exploratory Android/iOS shells only; they require a deliberately hosted secure API and are not supported releases.
 4. **Docs**: `ARCHITECTURE.md` + README install steps.
 
 ## Quality pack (tickets 8–10 — done)
@@ -172,9 +172,9 @@ Capacitor is a UI shell only. Set server.url to a hosted Next backend. android a
 ACE-Step needs server or desktop GPU stacks. Phones stream results from the hosted API.
 
 ### Phased roadmap
-1. PWA polish — done (Phase E).
-2. Tauri Windows scaffold — done (Phase E); optional Next sidecar still open.
-3. Capacitor production HTTPS URL, safe-area, audio plugins — partial (URL pattern done).
+1. PWA exploration — scaffolded.
+2. Tauri Windows shell — exploratory; Next sidecar, packaging, signing, and release support remain open.
+3. Capacitor shells — exploratory; production HTTPS, safe-area, audio plugins, store signing, and support remain deferred until the audio-quality gate.
 4. Multi-device sync via hosted DB if needed (Phase F).
 5. Optional local ACE-Step beside desktop.
 

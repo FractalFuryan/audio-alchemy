@@ -48,9 +48,9 @@ Do not say: Suno-quality, Suno alternative, copyright-free, or guaranteed commer
 
 | Preset | Checkpoint class | Steps | Batch | Thinking | Local 10GB |
 | --- | --- | --- | --- | --- | --- |
-| Fast | acestep-v15-turbo | 8 | 1 | false | Default |
-| Quality | acestep-v15-sft | 32 (tune 24-50) | 1 | false | Opt-in |
-| XL | acestep-v15-xl-* | — | — | — | Unsupported |
+| Fast | acestep-v15-turbo | 8 | 1 | false | Quicker drafts |
+| Quality | acestep-v15-sft | 32 (tune 24-50) | 1 | false | Preferred locally when SFT is installed and verified |
+| XL | acestep-v15-xl-* | — | — | — | Remote evaluation-only until the documented listening gate is passed |
 
 Env aliases: ACESTEP_MODEL_FAST, ACESTEP_MODEL_QUALITY, ACESTEP_PRESET_DEFAULT=fast,
 ACESTEP_FAST_INFERENCE_STEPS=8, ACESTEP_QUALITY_INFERENCE_STEPS=32, ACESTEP_LOCAL_VRAM_GB=10.

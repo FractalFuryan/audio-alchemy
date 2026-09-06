@@ -2,11 +2,13 @@
 
 Ownership-first AI music product. Not a Suno clone: no Suno trademarks, UI copying, proprietary code, training dumps, or comparison marketing claims.
 
-**Current baseline:** Next.js 15 + SQLite + local ACE-Step 1.5 on a consumer GPU. Phases A–E complete (durable jobs, library, Create UX, ACE hardening, PWA/Tauri/Capacitor scaffolds). Single-user, local-first.
+**Current baseline:** Next.js 15 + SQLite + local ACE-Step 1.5 on a consumer GPU. Durable jobs, library management, Create UX, ACE hardening, and exploratory PWA/Tauri/Capacitor scaffolds exist. The product remains single-user and local-first.
 
 **Invariant:** Clients → hosted Next/API → ACE-Step GPU workers. Mobile never runs SQLite or ACE-Step. Ownership language = product policy, not legal advice.
 
 **Compute security:** Never expose a local ACE-Step instance as a public HTTP endpoint. A hosted API only **enqueues** jobs; GPU workers **pull** from the queue using outbound connections. Local development hardware is never treated as shared public compute.
+
+**Quality gate:** Remote XL is evaluation-only until it wins a documented, reproducible listening evaluation against the verified local SFT baseline. Do not implement hosted authentication, queues, billing, or supported mobile clients until that audio-quality gate has been evaluated and the result recorded.
 
 **`compute_provider` on every generation/job:**
 | Value | Meaning |
@@ -45,7 +47,7 @@ Local quality (presets, eval compare, prompt packs, FFMPEG_PATH) stays on single
 - Optional ffmpeg post-FX pipeline (CPU).
 - **Exit:** Documented best local settings; no regressions on A–E.
 
-### Phase 1 — Multi-user foundation (2–4 weeks)
+### Phase 1 — Multi-user foundation (blocked by the audio-quality gate)
 - Auth (email magic link or OAuth).
 - Postgres (multi-tenant) replacing SQLite for hosted mode.
 - S3-compatible object storage for audio (+ optional artwork).
@@ -53,7 +55,7 @@ Local quality (presets, eval compare, prompt packs, FFMPEG_PATH) stays on single
 - User-scoped library APIs (`user_id` on every generation).
 - **Exit:** Two test users; isolated libraries; hosted API enqueues jobs; a **pull-based** private worker (e.g. invite-only 3080) claims jobs — WSL ACE never publicly exposed.
 
-### Phase 2 — Async scale-out (3–5 weeks)
+### Phase 2 — Async scale-out (blocked by the audio-quality gate)
 - Job queue (Redis + BullMQ or Postgres `SKIP LOCKED`).
 - GPU worker process(es) separate from web API.
 - Idempotent job keys; progress events (SSE or poll); cancel/retry across workers.
@@ -61,14 +63,14 @@ Local quality (presets, eval compare, prompt packs, FFMPEG_PATH) stays on single
 - Basic observability (structured logs, job metrics, error tracking).
 - **Exit:** API can restart without killing GPU work; queue drains cleanly; free-tier caps enforced.
 
-### Phase 3 — Closed beta (2–4 weeks)
+### Phase 3 — Closed beta (blocked by the audio-quality gate)
 - Invite-only signup; ToS / Privacy / Ownership policy pages (product + counsel review).
 - Abuse: report button, takedown workflow stub, upload virus/size limits.
 - Quality pack: prompt templates, CC0 reference pack (documented provenance), 1–2 small LoRAs.
 - Mobile: Capacitor → staging HTTPS API only.
 - **Exit:** 20–50 external users; P50 latency + failure rate known; no data leaks across tenants.
 
-### Phase 4 — Public beta (4–6 weeks)
+### Phase 4 — Public beta (blocked by the audio-quality gate)
 - Self-serve signup; email verification; password reset.
 - Hosted GPU path (RunPod / Vast / Modal / managed) with autoscale 0→N.
 - Billing-ready metering (usage events) even if payments later.
@@ -76,7 +78,7 @@ Local quality (presets, eval compare, prompt packs, FFMPEG_PATH) stays on single
 - Status page + on-call basics.
 - **Exit:** Public URL; waitlist optional; SLO draft (availability, queue wait).
 
-### Phase 5 — Paid / production readiness (4–8 weeks)
+### Phase 5 — Paid / production readiness (blocked by the audio-quality gate)
 - Stripe (or similar) plans: generations/month, max duration, concurrent jobs.
 - Cost controls: queue priority, model tier (fast vs quality), spend alerts.
 - Hardening: backups, PITR, secret rotation, WAF/bot limits, GDPR export/delete.
@@ -209,7 +211,7 @@ Ship a default only when eval harness + small human panel agree.
 See QUALITY.md.
 
 
-### Provider choices (before hosted coding)
+### Provider choices (only after the audio-quality gate)
 Pick and lock:
 - **Auth:** Auth.js (flexible) *or* Clerk (faster closed beta)  
 - **Postgres:** Neon or Supabase  
@@ -218,7 +220,7 @@ Pick and lock:
 
 Recommended default (not locked): **Auth.js + Neon + R2 + Postgres SKIP LOCKED** — confirm before hosted milestone.
 
-### Hosted beta milestone (ship as one cohesive unit — not piecemeal public)
+### Hosted beta milestone (deferred until XL passes the documented audio-quality gate)
 1. `APP_MODE=local|hosted` dual-mode flags  
 2. Postgres schema + `user_id` + **`compute_provider`** column  
 3. Auth middleware + ownership checks  
@@ -230,7 +232,7 @@ Recommended default (not locked): **Auth.js + Neon + R2 + Postgres SKIP LOCKED**
 Invite testers on `compute_provider=local` or a dedicated invite worker with strict concurrency. Add **`managed`** rented GPUs only after real usage/cost data. **`byo_worker`** later.
 
 ### Near-term recommendation
-Tickets **8–10 done**. Parallel: decide providers. Then build **1–7 as one hosted-beta milestone** behind auth/invites.
+Keep the surface stable and complete a documented local SFT versus remote XL listening evaluation. Only if XL wins should provider selection and hosted-beta tickets **1–7** be considered.
 
 ## 7. Local-only vs hosted
 
@@ -250,4 +252,4 @@ Tickets **8–10 done**. Parallel: decide providers. Then build **1–7 as one h
 
 ## Near-term recommendation
 
-Tickets **8 → 9 → 10** are done (see QUALITY.md). Choose providers, then ship **hosted beta (1–7)** as one milestone behind invites. Keep product copy ownership-first. Measure quality with the harness, not vibes. Never expose home ACE-Step publicly.
+Tickets **8 → 9 → 10** are done (see QUALITY.md). Next, run and document the remote XL listening evaluation against the verified local SFT baseline. Freeze hosted auth, queues, billing, and supported mobile work until that gate is evaluated. Keep product copy ownership-first, measure quality with the harness, and never expose the owner’s home RTX 3080 as public compute.

@@ -1,6 +1,6 @@
-# Audio Alchemy — Installables architecture
+# Audio Alchemy — Exploratory client architecture
 
-Phases A-E shape the product; this doc describes how installable shells relate to the Next.js core.
+This document describes how experimental client shells relate to the Next.js core. The Tauri and Capacitor folders are scaffolds for future evaluation, not polished or supported releases.
 
 ## Runtime topology
 
@@ -19,6 +19,8 @@ Chrome/Edge need HTTPS or localhost plus manifest + SW. /api is never cached.
 
 ## Desktop shell (Tauri 2)
 
+Status: **exploratory scaffold**. Do not describe this as a shipped desktop application.
+
 - Config: src-tauri/tauri.conf.json
 - App id: com.audioalchemy.app
 - Product name: Audio Alchemy
@@ -27,6 +29,8 @@ Chrome/Edge need HTTPS or localhost plus manifest + SW. /api is never cached.
 - SQLite stays in Node
 
 ## Mobile shell (Capacitor)
+
+Status: **exploratory scaffold**. Do not build a supported mobile client until the audio-quality gate has been evaluated and a secure hosted architecture is deliberately approved.
 
 - Config file: capacitor.config.ts
 - Override URL with CAPACITOR_SERVER_URL
@@ -40,13 +44,13 @@ A Job durability: done
 B Library management: done
 C Create UX: done
 D ACE-Step hardening: done
-E Installable app scope: done
+E Exploratory installable shells: scaffolded; production packaging and support deferred
 F Auth / multi-device sync: out of MVP
 
-## Follow-ups after E
+## Deferred client work
 
 - Optional Next sidecar for packaged desktop
 - CI for desktop artifacts on Windows runners
-- Production HTTPS URL for Capacitor
+- Production HTTPS URL for Capacitor, only after the audio-quality and hosting gates
 - Mobile safe-area CSS and background audio plugin
 - Optional ACE-Step models picker in Advanced
