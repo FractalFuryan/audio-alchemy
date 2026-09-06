@@ -53,6 +53,7 @@ run(process.execPath, [
   "src/lib/library-backup.ts",
   "src/lib/prompt-compiler.ts",
   "src/lib/ace-planner.ts",
+  "src/lib/create-health-ui.ts",
   "src/lib/generation-mode.ts",
 ]);
 
@@ -97,6 +98,13 @@ const {
   findPlannerModels,
   resolvePlannerAvailability,
 } = require(path.join(outDir, "ace-planner.js"));
+const {
+  resolveEnginePillState,
+  enginePillLabel,
+  inventoryHasSft,
+  qualitySegmentHint,
+  isSongFocusBlocked,
+} = require(path.join(outDir, "create-health-ui.js"));
 
 let passed = 0;
 function assert(cond, msg) {
@@ -910,6 +918,22 @@ assert(sfLabel.confirmed === false, "song-focus path still unconfirmed without a
 assert(sfLabel.modelLabel === null, "no requested-as-actual modelLabel");
 
 
+// Phase 6 — Create health truthfulness
+assert(enginePillLabel(resolveEnginePillState({ loading: true, generating: false })) === "Checking local engine…", "pill checking");
+assert(enginePillLabel(resolveEnginePillState({ loading: false, generating: true, mode: "ace-step", aceStep: true })) === "Generating", "pill generating");
+assert(enginePillLabel(resolveEnginePillState({ loading: false, generating: false, mode: "mock", aceStep: false })) === "Local engine ready", "pill mock ready (never mock wording)");
+assert(enginePillLabel(resolveEnginePillState({ loading: false, generating: false, mode: "ace-step", aceStep: true })) === "Local engine ready", "pill ace online");
+assert(enginePillLabel(resolveEnginePillState({ loading: false, generating: false, mode: "ace-step", aceStep: false })) === "Engine unavailable", "pill ace offline");
+assert(inventoryHasSft({ models: { items: [{ id: "acestep-v15-sft" }] } }) === true, "sft inventory true");
+assert(inventoryHasSft({ models: { items: [{ id: "acestep-v15-turbo" }] } }) === false, "sft inventory false");
+assert(qualitySegmentHint({ loading: false, sftAvailable: true }) === "SFT · higher fidelity", "quality hint sft");
+assert(!qualitySegmentHint({ loading: false, sftAvailable: false }).includes("unconfirmed"), "quality hint never unconfirmed");
+assert(qualitySegmentHint({ loading: true, sftAvailable: false }) === "Checking local engine…", "quality hint checking");
+assert(isSongFocusBlocked({ planningMode: "song-focus", healthLoading: true, healthKnown: false, plannerAvailable: false, mode: "ace-step" }) === false, "song focus not blocked while checking");
+assert(isSongFocusBlocked({ planningMode: "song-focus", healthLoading: false, healthKnown: true, plannerAvailable: true, mode: "ace-step" }) === false, "song focus ok when planner confirmed");
+assert(isSongFocusBlocked({ planningMode: "song-focus", healthLoading: false, healthKnown: true, plannerAvailable: false, mode: "ace-step" }) === true, "song focus blocked without planner");
+assert(isSongFocusBlocked({ planningMode: "direct", healthLoading: false, healthKnown: true, plannerAvailable: false, mode: "ace-step" }) === false, "direct never song-blocked");
+
 // Restore env
 for (const k of Object.keys(process.env)) {
   if (!(k in prev)) delete process.env[k];
@@ -919,5 +943,5 @@ Object.assign(process.env, prev);
 fs.rmSync(outDir, { recursive: true, force: true });
 
 console.log(
-  `OK: ${passed} assertions passed (ACE-Step + Phase 3–5 + Song focus)`
+  `OK: ${passed} assertions passed (ACE-Step + Phase 3–7 + Song focus + Create health)`
 );

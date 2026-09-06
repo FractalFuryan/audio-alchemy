@@ -30,11 +30,6 @@ body {
   color: var(--aa-text);
 }
 
-::selection {
-  background: rgba(230, 184, 77, 0.35);
-  color: #fffaf0;
-}
-
 :focus-visible {
   outline: 2px solid rgba(139, 92, 246, 0.85);
   outline-offset: 2px;
@@ -69,8 +64,16 @@ select:focus:not(:focus-visible) {
     @apply w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60;
   }
 
+  .aa-card-light {
+    @apply border-alchemy-border/70 bg-alchemy-surface/70 shadow-lg shadow-black/20;
+  }
+
   .aa-empty {
     @apply rounded-2xl border border-dashed border-alchemy-border/80 bg-alchemy-surface/40 px-5 py-8 text-center text-sm text-alchemy-muted;
+  }
+
+  .aa-empty-quiet {
+    @apply border-alchemy-border/50 bg-transparent py-5 shadow-none;
   }
 }
 

@@ -2,9 +2,7 @@ import type { MetadataRoute } from "next";
 
 /**
  * Web App Manifest for Chrome/Edge/Android installability.
- * Requirements covered: name, short_name, start_url, display=standalone,
- * theme/background colors, 192 + 512 PNG icons (any + maskable).
- * Served at /manifest.webmanifest by Next.js App Router.
+ * Deep plum / gold brand aligned with Audio Alchemy mark.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -16,8 +14,8 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     scope: "/",
     display: "standalone",
-    background_color: "#0b1020",
-    theme_color: "#0b1020",
+    background_color: "#120715",
+    theme_color: "#120715",
     orientation: "any",
     categories: ["music", "entertainment"],
     icons: [
@@ -38,6 +36,12 @@ export default function manifest(): MetadataRoute.Manifest {
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",
+      },
+      {
+        src: "/brand/audio-alchemy-mark.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any",
       },
       {
         src: "/icons/icon.svg",

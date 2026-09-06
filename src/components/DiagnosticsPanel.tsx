@@ -249,6 +249,11 @@ export function DiagnosticsPanel({
                   {diag.ffmpeg.hint}
                 </li>
               ) : null}
+              <li className="pt-2 font-sans text-[11px] normal-case text-alchemy-muted/90">
+                <strong className="text-alchemy-text">Local mode:</strong> generations
+                run on the owner&apos;s configured local engine on this machine. This is
+                not a public rendering service.
+              </li>
             </ul>
           ) : null}
           <div className="mt-3 flex gap-2 font-sans">

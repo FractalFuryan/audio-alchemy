@@ -2,11 +2,11 @@
 
 Ownership-first AI music product. Not a Suno clone: no Suno trademarks, UI copying, proprietary code, training dumps, or comparison marketing claims.
 
-**Current baseline:** Next.js 15 + SQLite + local ACE-Step 1.5 (Turbo, batch 1, 8 steps) on WSL / RTX 3080 10GB. Phases A–E complete (durable jobs, library, Create UX, ACE hardening, PWA/Tauri/Capacitor scaffolds). Single-user, local-first.
+**Current baseline:** Next.js 15 + SQLite + local ACE-Step 1.5 on a consumer GPU. Phases A–E complete (durable jobs, library, Create UX, ACE hardening, PWA/Tauri/Capacitor scaffolds). Single-user, local-first.
 
 **Invariant:** Clients → hosted Next/API → ACE-Step GPU workers. Mobile never runs SQLite or ACE-Step. Ownership language = product policy, not legal advice.
 
-**Compute security:** Never expose WSL/home ACE-Step as a public HTTP endpoint. Hosted API only **enqueues** jobs; GPU workers **pull** from the queue (outbound connect). Dave's RTX 3080 is a personal/local/dev worker — not a shared public render farm.
+**Compute security:** Never expose a local ACE-Step instance as a public HTTP endpoint. A hosted API only **enqueues** jobs; GPU workers **pull** from the queue using outbound connections. Local development hardware is never treated as shared public compute.
 
 **`compute_provider` on every generation/job:**
 | Value | Meaning |
@@ -223,7 +223,7 @@ Recommended default (not locked): **Auth.js + Neon + R2 + Postgres SKIP LOCKED**
 2. Postgres schema + `user_id` + **`compute_provider`** column  
 3. Auth middleware + ownership checks  
 4. S3/R2 storage adapter + signed URLs  
-5. Queue + **pull-based** GPU worker (3080 pulls; never inbound-expose WSL)  
+5. Queue + **pull-based** GPU worker (outbound connection; never publicly expose a local ACE-Step port)  
 6. Idempotency-Key + free-tier quotas + **one-job concurrency** on invite worker  
 7. Progress API (poll/SSE) for web + mobile  
 
@@ -244,7 +244,7 @@ Tickets **8–10 done**. Parallel: decide providers. Then build **1–7 as one h
 | Mock mode | Public URL, CDN signed downloads |
 | PWA against localhost | PWA against production HTTPS |
 
-**Bridge pattern:** Hosted API enqueues; invite-era pull worker may be Dave's 3080 (private, 1 concurrent). Public/`managed` uses rented GPUs. `byo_worker` lets advanced users attach their own pull worker. Never port-forward WSL ACE to the internet.
+**Bridge pattern:** The hosted API enqueues work. Private development workers may pull one job at a time; public `managed` workloads use dedicated hosted GPUs. `byo_worker` lets advanced users attach their own authenticated pull worker. Never port-forward a local ACE-Step service to the internet.
 
 ---
 

@@ -1,12 +1,11 @@
 # Audio Alchemy
 
-Ownership-first AI music generation MVP. Create tracks from a prompt (optional lyrics + duration), play and download them, and keep generations on your machine.
-
+Ownership-first AI music generation. Create tracks from a prompt, organize them in a local library, and connect to an ACE-Step 1.5 generation service when configured.
 
 ## Features
 
-- **Create** (`/`): prompt/style, optional lyrics, duration (30-180s), Generate
-- **Library** (`/library`): list generations with status, play, download
+- **Create** (`/`): direct generation or optional Song Focus planning, editable prompts, lyrics, style, duration, and quality presets
+- **Library** (`/library`): play and download tracks; organize favorites, collections, and tags; create variations; export metadata
 - **Ownership** (`/ownership`): product policy — you own your outputs (not legal advice)
 - **Generation modes**
   - `mock` (default): synthesizes a real WAV tone so play/download work end-to-end
@@ -36,7 +35,7 @@ npm start
 
 ## Environment
 
-See `.env.example` (Phase D ACE-Step hardening):
+See `.env.example` for all supported settings:
 
 | Variable | Description |
 | --- | --- |
@@ -45,9 +44,9 @@ See `.env.example` (Phase D ACE-Step hardening):
 | `ACESTEP_API_KEY` | Optional API key (**server-only**; never returned by `/api/health`) |
 | `HF_TOKEN` | Optional Hugging Face token fallback for auth (server-only) |
 | `ACESTEP_MODEL` | Optional model / checkpoint name |
-| `ACESTEP_INFERENCE_STEPS` | Inference steps (default `8`, modest for 10GB VRAM) |
+| `ACESTEP_INFERENCE_STEPS` | Inference steps used when no preset-specific override is configured |
 | `ACESTEP_AUDIO_FORMAT` | `mp3` (default) / `wav` / `flac` / `opus` / `aac` |
-| `ACESTEP_BATCH_SIZE` | Default `1` (keep on 10GB) |
+| `ACESTEP_BATCH_SIZE` | Default `1`; increase only when the generation worker has sufficient VRAM |
 | `ACESTEP_THINKING` | Default `false` (thinking uses more VRAM) |
 | `ACESTEP_POLL_INTERVAL_MS` | Poll interval for `generateAndWait` (default `2000`) |
 | `ACESTEP_TIMEOUT_MS` | Job timeout during reconcile (default `600000`) |
@@ -59,7 +58,7 @@ See `.env.example` (Phase D ACE-Step hardening):
 | `POSTPROCESS_HIGHPASS_HZ` | High-pass Hz (default `80`) |
 | `POSTPROCESS_TRUE_PEAK_DB` | Limiter ceiling dBTP (default `-1`) |
 
-**Single-flight:** in ace-step mode only one GPU job runs at a time. A second create/retry while another job is pending/processing returns **409** until it finishes or is cancelled. Protects RTX 3080 10GB VRAM.
+**Single-flight:** in ACE-Step mode, only one GPU job runs at a time by default. A second create or retry while another job is active returns **409** until the first job finishes or is cancelled. This provides a safe default for consumer GPUs.
 
 **Secrets:** Generation always goes through Next.js API routes. /api/health returns { ok, mode, aceStep, settings } — booleans and safe settings only (no API keys).
 
@@ -99,20 +98,6 @@ Best-effort TypeScript client in `src/lib/ace-step-client.ts`:
 - SQLite DB: `data/audio-alchemy.db`
 - Audio files: `data/audio/`
 - `data/` is gitignored (except `.gitkeep`)
-
-## Push to GitHub
-
-If the remote is empty:
-
-```bash
-cd audio-alchemy
-git init
-git add .
-git commit -m "Initial Audio Alchemy MVP"
-git branch -M main
-git remote add origin https://github.com/FractalFuryan/audio-alchemy.git
-git push -u origin main
-```
 
 ## License notes
 

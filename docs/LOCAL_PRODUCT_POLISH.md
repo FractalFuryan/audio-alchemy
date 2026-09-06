@@ -100,7 +100,7 @@ npm run build
 - Cloud sync of library backups; remote object-store / PITR.
 - Separate install/onboarding visual QA package (PWA/Tauri already scaffolded).
 
-Local polish Phases 2-5 are complete.
+Local polish Phases 2-5 are complete (see Phases 6-7 below).
 
 ## Song focus (local ACE planner) — DONE
 
@@ -159,3 +159,39 @@ npm run build
 - Exposing ACE chain-of-thought in UI or SQLite.
 - Artist-name imitation or unsupported ACE fields (e.g. `negative_prompt`).
 
+
+## Phase 6 - Create screen simplification (DONE)
+
+1. Health truthfulness — status pill: Local engine ready / Generating / Engine unavailable / Checking local engine… Never labels mock when ACE is up; Quality never says unconfirmed when SFT inventory is present; Song focus never says unavailable while checking or when planner is confirmed.
+2. Minimal Create above Generate: Prompt, Direct/Song focus compact selector, Quality/Fast compact selector, Generate.
+3. Quality default when local SFT confirmed; else Fast with explanation only after interaction.
+4. One Fine-tune drawer (templates, style, lyrics, duration, post-FX, advanced).
+5. Removed Local ACE readiness block from Create; Diagnostics collapsed by default; no raw inventory in primary flow.
+6. Brand: header mark + one large home logo; lighter Create card; quieter empty result; elevated download/library, subdued delete.
+7. Helpers in src/lib/create-health-ui.ts covered by unit tests.
+
+## Phase 7 - Pre-hosting docs only (DONE)
+
+Docs only — no hosted servers, auth, billing, queues, or remote user access implemented.
+
+1. docs/HOSTING_BOUNDARY.md — what changes only when ready for servers.
+2. docs/COMPUTE_PROVIDER_MODEL.md — local vs hosted vs user endpoint; public jobs never use local development hardware.
+3. docs/QUALITY_GATES.md — eval gates before hosted beta.
+4. In-app Local mode note on Diagnostics and Ownership.
+
+### Verify
+
+Run test:unit and build.
+
+### Migration notes
+
+- No new SQLite columns for Phases 6-7.
+- Phases 3-4 migrations remain non-destructive on DB open.
+
+### Intentionally deferred
+
+- Hosted auth / multi-user queues / billing / Postgres / object storage.
+- LoRA, reference-audio upload, cloud LLM planning.
+- Exposing ACE chain-of-thought or using local development hardware as a public render server.
+
+Local polish Phases 2-7 are complete (Phase 7 = docs + Local mode note only).

@@ -8,7 +8,13 @@ import {
   compileMusicBrief,
   type PromptCompileResult,
 } from "@/lib/prompt-compiler";
-import { classifyModelFamily } from "@/lib/model-family";
+import {
+  enginePillLabel,
+  inventoryHasSft,
+  isSongFocusBlocked,
+  qualitySegmentHint,
+  resolveEnginePillState,
+} from "@/lib/create-health-ui";
 import { resolveDisplayModelLabel } from "@/lib/ace-capabilities";
 import { titleFromPrompt } from "@/lib/title";
 import { AudioPlayer } from "./AudioPlayer";
@@ -108,6 +114,7 @@ const STYLE_SUGGESTIONS = [
   "metalcore",
 ];
 
+
 export function CreateForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -137,8 +144,8 @@ export function CreateForm() {
   const [appliedPackTags, setAppliedPackTags] = useState<string[]>([]);
   const [keepTagsOnTemplate, setKeepTagsOnTemplate] = useState(false);
   const [preset, setPreset] = useState<"fast" | "quality">("fast");
+  const [presetTouched, setPresetTouched] = useState(false);
   const [fineTuneOpen, setFineTuneOpen] = useState(false);
-  const [postFxOpen, setPostFxOpen] = useState(false);
   const [postFxPreset, setPostFxPreset] = useState<"off" | "light" | "loudness">("off");
   const [planningMode, setPlanningMode] = useState<PlanningMode>("direct");
   const [musicBrief, setMusicBrief] = useState("");
@@ -151,6 +158,7 @@ export function CreateForm() {
   const [advAudioFormat, setAdvAudioFormat] = useState<string>("");
   const [advTouched, setAdvTouched] = useState(false);
   const linkedLoaded = useRef<string | null>(null);
+  const presetAutoApplied = useRef(false);
 
   const derivedTitle = useMemo(() => titleFromPrompt(prompt), [prompt]);
 
@@ -164,7 +172,7 @@ export function CreateForm() {
     try {
       const res = await fetch("/api/health");
       const data = await res.json();
-      setHealth({
+      const next: HealthInfo = {
         ok: Boolean(data.ok),
         mode: data.mode === "ace-step" ? "ace-step" : "mock",
         aceStep: Boolean(data.aceStep),
@@ -181,20 +189,28 @@ export function CreateForm() {
             : undefined,
         planner:
           data.planner && typeof data.planner === "object" ? data.planner : undefined,
-      });
-      if (
-        !advTouched &&
-        data.presets?.default &&
-        (data.presets.default === "fast" || data.presets.default === "quality")
-      ) {
-        setPreset(data.presets.default);
+      };
+      setHealth(next);
+
+      // Quality preferred when local SFT inventory is confirmed; else Fast.
+      if (!presetTouched && !presetAutoApplied.current) {
+        const sft = inventoryHasSft(next);
+        const inventoryKnown =
+          Array.isArray(next.models?.items) && (next.models?.items?.length ?? 0) > 0;
+        if (sft) {
+          setPreset("quality");
+          presetAutoApplied.current = true;
+        } else if (inventoryKnown || next.mode === "mock") {
+          setPreset("fast");
+          presetAutoApplied.current = true;
+        }
       }
     } catch {
       setHealth({ ok: false, mode: "mock", aceStep: false });
     } finally {
       setHealthLoading(false);
     }
-  }, [advTouched]);
+  }, [presetTouched]);
 
   useEffect(() => {
     void refreshHealth();
@@ -243,7 +259,6 @@ export function CreateForm() {
     setPrompt(t.promptSkeleton);
     const nextPackTags = [...t.styleTags];
     if (keepTagsOnTemplate) {
-      // Explicit keep: drop previous pack tags, then merge new pack tags with remaining user tags.
       const kept = clearPackTagsFromStyle(style, appliedPackTags);
       const keptList = kept
         .split(",")
@@ -257,7 +272,6 @@ export function CreateForm() {
       }
       setStyle(merged.join(", "));
     } else {
-      // Default: replace (never silently merge old template tags).
       setStyle(nextPackTags.join(", "));
     }
     setAppliedPackTags(nextPackTags);
@@ -274,12 +288,7 @@ export function CreateForm() {
   }
 
   function onPackFilterChange(nextPack: string) {
-    // Changing genre pack clears previous pack tags (unless user opted to keep).
-    if (!keepTagsOnTemplate && appliedPackTags.length > 0) {
-      setStyle(clearPackTagsFromStyle(style, appliedPackTags));
-      setAppliedPackTags([]);
-    } else if (appliedPackTags.length > 0) {
-      // Keep mode: still remove previous pack tags, leave user tags.
+    if (appliedPackTags.length > 0) {
       setStyle(clearPackTagsFromStyle(style, appliedPackTags));
       setAppliedPackTags([]);
     }
@@ -292,7 +301,6 @@ export function CreateForm() {
     setAppliedPackTags([]);
   }
 
-  // Prefill Advanced defaults from safe /api/health settings (no secrets).
   useEffect(() => {
     if (advTouched || !health?.settings) return;
     const s = health.settings;
@@ -323,7 +331,6 @@ export function CreateForm() {
     };
   }, [linkedId]);
 
-  // Prefill Create from an existing track for "Generate variation" (new seed on submit).
   useEffect(() => {
     if (!variationId) return;
     let cancelled = false;
@@ -345,6 +352,7 @@ export function CreateForm() {
         setTitleTouched(true);
         if (g.preset === "fast" || g.preset === "quality") {
           setPreset(g.preset);
+          setPresetTouched(true);
         }
         if (g.requestedModelName) {
           setAdvModel(g.requestedModelName);
@@ -395,12 +403,11 @@ export function CreateForm() {
   const aceBusy =
     health?.mode === "ace-step" && Boolean(health.settings?.busy);
 
-  const plannerAvailable = Boolean(health?.planner?.available);
+  const plannerConfirmed = Boolean(health?.planner?.available);
   const plannerReason =
     health?.planner?.reason ||
     "Local ACE planner/LM not available";
 
-  // Deterministic compile whenever prompt/style/lyrics change (Song focus preview).
   useEffect(() => {
     const result = compileMusicBrief({ prompt, style, lyrics });
     setCompileResult(result);
@@ -409,8 +416,13 @@ export function CreateForm() {
     }
   }, [prompt, style, lyrics, planningMode, briefTouched]);
 
-  const songFocusBlocked =
-    planningMode === "song-focus" && (!plannerAvailable || health?.mode !== "ace-step");
+  const songFocusBlocked = isSongFocusBlocked({
+    planningMode,
+    healthLoading,
+    healthKnown: health != null,
+    plannerAvailable: plannerConfirmed,
+    mode: health?.mode,
+  });
   const canGenerate =
     !busy &&
     !healthLoading &&
@@ -429,22 +441,7 @@ export function CreateForm() {
     [style]
   );
 
-
-  const sftAvailable = useMemo(() => {
-    const items = health?.models?.items || [];
-    const qualityItem = health?.presets?.items?.find((x) => x.id === "quality");
-    const qualityModel = qualityItem?.model;
-    if (qualityModel && classifyModelFamily(qualityModel) === "sft") {
-      // Confirmed only when inventory/probe lists an SFT family id, or env-fallback reports the quality model.
-      if (items.some((m) => classifyModelFamily(m.id) === "sft")) return true;
-      if (items.some((m) => m.id === qualityModel)) return true;
-      // Mock / unreachable: do not claim SFT unless probe items include it.
-      if (health?.mode === "mock" && items.some((m) => classifyModelFamily(m.id) === "sft")) {
-        return true;
-      }
-    }
-    return items.some((m) => classifyModelFamily(m.id) === "sft");
-  }, [health]);
+  const sftAvailable = useMemo(() => (health ? inventoryHasSft(health) : false), [health]);
 
   const qualityReady = health?.presets?.items?.find((x) => x.id === "quality");
   const fastReady = health?.presets?.items?.find((x) => x.id === "fast");
@@ -489,7 +486,6 @@ export function CreateForm() {
           ...(advAudioFormat.trim() ? { audioFormat: advAudioFormat.trim() } : {}),
           batchSize: 1,
           postFxPreset,
-          // ACE-Step uses use_random_seed=true server-side → new seed for variations
         }),
       });
       const data = await res.json();
@@ -571,66 +567,69 @@ export function CreateForm() {
 
   const formDisabled = busy || Boolean(isOpen);
 
+  const segmentBtn = (active: boolean, blocked = false) =>
+    `rounded-lg border px-2.5 py-2 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
+      active
+        ? blocked
+          ? "border-alchemy-gold/70 bg-alchemy-gold/10 text-alchemy-text"
+          : "border-alchemy-accentGlow bg-alchemy-accent/15 text-alchemy-text shadow-glow-accent"
+        : "border-alchemy-border bg-alchemy-bg/80 text-alchemy-muted hover:border-alchemy-accent/40"
+    }`;
+
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
-      <div className="flex flex-col items-center justify-center gap-2 pt-1 pb-1 opacity-90">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-3">
+      <div className="flex flex-col items-center justify-center gap-1 pt-0 pb-0">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/brand/audio-alchemy-logo.png"
           alt="Audio Alchemy"
-          className="h-12 w-auto max-w-[min(100%,280px)] object-contain opacity-90 sm:h-14"
+          className="h-14 w-auto max-w-[min(100%,300px)] object-contain sm:h-16"
         />
       </div>
 
       <form
         onSubmit={onSubmit}
-        className="aa-card p-5 sm:p-6"
+        className="aa-card aa-card-light p-4 sm:p-5"
       >
-        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-alchemy-text">
+            <h1 className="text-xl font-semibold tracking-tight text-alchemy-text sm:text-2xl">
               Create
             </h1>
-            <p className="mt-1 text-sm text-alchemy-muted">
+            <p className="mt-0.5 text-xs text-alchemy-muted sm:text-sm">
               Describe a track. You own what you generate.
             </p>
           </div>
-          <HealthBadge health={health} loading={healthLoading} />
-        </div>
-
-        <GpuStatusPanel health={health} loading={healthLoading} sftAvailable={sftAvailable} />
-
-        <div className="mb-4">
-          <DiagnosticsPanel compact />
+          <EngineStatusPill
+            health={health}
+            loading={healthLoading}
+            generating={Boolean(isOpen) || busy}
+          />
         </div>
 
         {aceUnhealthy ? (
-          <div className="mb-4 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
-            <p className="font-medium">ACE-Step is offline or unreachable.</p>
+          <div className="mb-3 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
+            <p className="font-medium">Local engine unreachable.</p>
             <p className="mt-1 text-xs text-alchemy-gold/90">
-              Start the ACE-Step API (check <code className="text-[10px]">ACESTEP_API_URL</code>),
-              or set <code className="text-[10px]">GENERATION_MODE=mock</code> for demos without a worker.
-              Generate stays disabled until health recovers — see Diagnostics below.
+              Start ACE-Step or use Diagnostics. Generate stays disabled until health recovers.
             </p>
           </div>
         ) : null}
 
         {aceBusy && !aceUnhealthy ? (
-          <div className="mb-4 rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-sm text-alchemy-gold">
-            <p className="font-medium">GPU is busy (single-flight).</p>
+          <div className="mb-3 rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-sm text-alchemy-gold">
+            <p className="font-medium">Engine busy (one job at a time).</p>
             <p className="mt-1 text-xs opacity-90">
-              Only one ACE-Step job runs at a time to protect ~10GB VRAM. Wait for
-              the current job, or cancel it from the result panel / library, then retry.
+              Wait for the current job or cancel it, then retry.
             </p>
           </div>
         ) : null}
 
         {variationBanner ? (
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-alchemy-accent/40 bg-alchemy-accent/10 px-3 py-2 text-sm text-alchemy-text">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-alchemy-accent/40 bg-alchemy-accent/10 px-3 py-2 text-sm text-alchemy-text">
             <span>
               Variation of <strong className="text-alchemy-gold">{variationBanner}</strong>
-              {" "}
-              — prompt & settings carried forward; a new seed will be used.
+              {" — "}new seed on Generate.
             </span>
             <button
               type="button"
@@ -646,56 +645,63 @@ export function CreateForm() {
           </div>
         ) : null}
 
-        {/* Hero prompt */}
-        <section className="mb-5">
+        {/* Minimal default: Prompt */}
+        <section className="mb-3">
           <label
             htmlFor="create-prompt"
-            className="block text-sm font-medium text-alchemy-text mb-1.5"
+            className="block text-sm font-medium text-alchemy-text mb-1"
           >
             Prompt
           </label>
-          <p className="mb-1.5 text-xs text-alchemy-muted">
-            Mood, instruments, tempo, and vibe in a sentence or two.
-          </p>
           <textarea
             id="create-prompt"
             required
             disabled={formDisabled}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            rows={4}
+            rows={3}
             placeholder="Dreamy synthwave with warm pads and a steady pulse…"
-            className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-3 text-base text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
+            className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-base text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
           />
         </section>
 
-        {/* Direct vs Song focus */}
-        <section className="mb-5">
-          <p className="mb-1.5 text-sm font-medium text-alchemy-text">Planning</p>
-          <div className="grid grid-cols-2 gap-2">
+        {/* Direct / Song focus — compact segmented */}
+        <section className="mb-3">
+          <p className="mb-1 text-sm font-medium text-alchemy-text" id="planning-label">
+            Planning
+          </p>
+          <div
+            className="grid grid-cols-2 gap-1.5"
+            role="group"
+            aria-labelledby="planning-label"
+          >
             {(
               [
-                {
-                  id: "direct" as const,
-                  label: "Direct",
-                  desc: "Submit your prompt as written (faster).",
-                },
+                { id: "direct" as const, label: "Direct", hint: "As written" },
                 {
                   id: "song-focus" as const,
                   label: "Song focus",
-                  desc: "Local ACE planner — better structure, slower.",
+                  hint: "Local planner",
                 },
               ] as const
             ).map((item) => {
               const active = planningMode === item.id;
               const blocked =
                 item.id === "song-focus" &&
-                (!plannerAvailable || health?.mode !== "ace-step");
+                !healthLoading &&
+                health != null &&
+                (!plannerConfirmed || health.mode !== "ace-step");
               return (
                 <button
                   key={item.id}
                   type="button"
                   disabled={formDisabled}
+                  aria-pressed={active}
+                  title={
+                    item.id === "song-focus"
+                      ? "Uses local ACE planner when confirmed. Slower. Prompt stays on this machine."
+                      : "Submit your prompt as written."
+                  }
                   onClick={() => {
                     setPlanningMode(item.id);
                     setBriefTouched(false);
@@ -706,38 +712,30 @@ export function CreateForm() {
                       setBriefOpen(true);
                     }
                   }}
-                  className={`rounded-xl border px-3 py-3 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
-                    active
-                      ? blocked
-                        ? "border-alchemy-gold/70 bg-alchemy-gold/10 text-alchemy-text"
-                        : "border-alchemy-accentGlow bg-alchemy-accent/15 text-alchemy-text shadow-glow-accent"
-                      : "border-alchemy-border bg-alchemy-bg text-alchemy-muted hover:border-alchemy-accent/40"
-                  }`}
+                  className={segmentBtn(active, blocked)}
                 >
                   <span className="block text-sm font-semibold text-alchemy-text">
                     {item.label}
                   </span>
-                  <span className="mt-1 block text-[11px] leading-snug">{item.desc}</span>
-                  {item.id === "song-focus" && blocked ? (
-                    <span className="mt-1 block text-[11px] text-alchemy-gold">
-                      Unavailable — pick Direct
-                    </span>
-                  ) : null}
+                  <span className="mt-0.5 block text-[11px] leading-snug text-alchemy-muted">
+                    {item.hint}
+                  </span>
                 </button>
               );
             })}
           </div>
-          <p className="mt-2 text-xs text-alchemy-muted">
-            Uses the local ACE planner to improve structure and prompt adherence. Slower
-            than Direct. Your prompt stays on this machine.
-          </p>
+
+          {planningMode === "song-focus" && healthLoading ? (
+            <p className="mt-1.5 text-xs text-alchemy-muted">Checking local engine…</p>
+          ) : null}
+
           {planningMode === "song-focus" && songFocusBlocked ? (
             <div className="mt-2 rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-xs text-alchemy-gold">
               <p className="font-medium">Song focus unavailable</p>
               <p className="mt-1 opacity-90">{plannerReason}</p>
               <p className="mt-1 opacity-90">
                 Choose <strong className="text-alchemy-text">Direct</strong> to generate.
-                Song focus will not silently fall back while still selected.
+                No silent fallback while Song focus stays selected.
               </p>
               <button
                 type="button"
@@ -750,8 +748,8 @@ export function CreateForm() {
             </div>
           ) : null}
 
-          {planningMode === "song-focus" && !songFocusBlocked ? (
-            <div className="mt-3 space-y-2">
+          {planningMode === "song-focus" && !songFocusBlocked && !healthLoading ? (
+            <div className="mt-2 space-y-2">
               {compileResult && compileResult.conflicts.length > 0 ? (
                 <div className="rounded-lg border border-alchemy-gold/40 bg-alchemy-gold/10 px-3 py-2 text-xs text-alchemy-gold">
                   <p className="font-medium">Style tags conflict with the prompt</p>
@@ -780,30 +778,26 @@ export function CreateForm() {
               <button
                 type="button"
                 onClick={() => setBriefOpen((o) => !o)}
-                className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/60 px-3 py-2 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
+                className="flex w-full items-center justify-between rounded-lg border border-alchemy-border bg-alchemy-bg/50 px-3 py-1.5 text-left text-xs text-alchemy-text hover:border-alchemy-accent/40"
               >
-                <span className="font-medium">Final music brief</span>
-                <span className="text-xs text-alchemy-muted">
-                  {briefOpen ? "Hide" : "Show"} · editable before Generate
+                <span className="font-medium">Music brief</span>
+                <span className="text-alchemy-muted">
+                  {briefOpen ? "Hide" : "Show"} · editable
                 </span>
               </button>
               {briefOpen ? (
-                <div className="space-y-2 rounded-xl border border-alchemy-border bg-alchemy-bg/30 px-3 py-3">
-                  <p className="text-xs text-alchemy-muted">
-                    Deterministic local organizer (not a cloud LLM). Lyrics stay separate.
-                    Edit freely before Generate — Song focus sends this brief with{" "}
-                    <code className="text-[11px]">thinking: true</code>.
-                  </p>
+                <div className="space-y-2 rounded-lg border border-alchemy-border bg-alchemy-bg/30 px-3 py-2">
                   <textarea
                     id="create-music-brief"
+                    aria-label="Music brief"
                     disabled={formDisabled}
                     value={musicBrief}
                     onChange={(e) => {
                       setBriefTouched(true);
                       setMusicBrief(e.target.value);
                     }}
-                    rows={5}
-                    className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 font-mono disabled:opacity-60"
+                    rows={4}
+                    className="w-full rounded-lg border border-alchemy-border bg-alchemy-bg px-3 py-2 text-sm text-alchemy-text font-mono focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
                   />
                   <button
                     type="button"
@@ -824,23 +818,17 @@ export function CreateForm() {
           ) : null}
         </section>
 
-
-        {/* Quality / Fast — immediately visible */}
-        <section className="mb-5">
-          <p className="mb-1.5 text-sm font-medium text-alchemy-text">Preset</p>
-          <p className="mb-2 text-xs text-alchemy-muted">
-            Fast targets Turbo; Quality targets{" "}
-            <code className="text-[11px]">acestep-v15-sft</code>
-            {sftAvailable
-              ? " (SFT available on this worker)."
-              : " — SFT not confirmed in model inventory yet."}{" "}
-            {health?.capabilities?.some((c) => c.id === "remote-xl-sft" && c.available)
-              ? "Remote XL-SFT is available via configured endpoint."
-              : "XL is not offered on local 10GB VRAM (optional remote endpoint only)."}{" "}
-            Batch is always 1.
+        {/* Quality / Fast — compact segmented */}
+        <section className="mb-3">
+          <p className="mb-1 text-sm font-medium text-alchemy-text" id="preset-label">
+            Quality
           </p>
-          <div className="grid grid-cols-2 gap-2">
-            {(["fast", "quality"] as const).map((id) => {
+          <div
+            className="grid grid-cols-2 gap-1.5"
+            role="group"
+            aria-labelledby="preset-label"
+          >
+            {(["quality", "fast"] as const).map((id) => {
               const item = health?.presets?.items?.find((x) => x.id === id);
               const active = preset === id;
               const blocked = item?.ready === false;
@@ -849,42 +837,35 @@ export function CreateForm() {
                   key={id}
                   type="button"
                   disabled={formDisabled || blocked}
+                  aria-pressed={active}
+                  title={
+                    id === "quality"
+                      ? sftAvailable
+                        ? "Higher fidelity · local SFT confirmed"
+                        : "Higher fidelity · more steps"
+                      : "Lower latency · Turbo-class"
+                  }
                   onClick={() => {
                     setPreset(id);
+                    setPresetTouched(true);
                     setAdvTouched(true);
                     if (item?.inferenceSteps != null) {
                       setAdvInferenceSteps(String(item.inferenceSteps));
                     }
                     if (item?.model) setAdvModel(item.model);
                   }}
-                  className={`rounded-xl border px-3 py-3 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
-                    active
-                      ? "border-alchemy-accentGlow bg-alchemy-accent/15 text-alchemy-text shadow-glow-accent"
-                      : "border-alchemy-border bg-alchemy-bg text-alchemy-muted hover:border-alchemy-accent/40"
-                  }`}
+                  className={segmentBtn(active, false)}
                 >
-                  <span className="block text-sm font-semibold capitalize text-alchemy-text">
+                  <span className="block text-sm font-semibold text-alchemy-text">
                     {id === "fast" ? "Fast" : "Quality"}
                   </span>
-                  <span className="mt-1 block text-[11px] leading-snug">
+                  <span className="mt-0.5 block text-[11px] leading-snug text-alchemy-muted">
                     {id === "fast"
-                      ? `Lower latency · Turbo${fastReady?.model ? ` · ${fastReady.model}` : ""}`
-                      : health?.qualityTier === "remote-xl-sft" &&
-                          health?.capabilities?.some(
-                            (c) => c.id === "remote-xl-sft" && c.available
-                          )
-                        ? `Higher fidelity · remote XL-SFT${
-                            health.capabilities.find((c) => c.id === "remote-xl-sft")
-                              ?.modelId
-                              ? ` · ${health.capabilities.find((c) => c.id === "remote-xl-sft")?.modelId}`
-                              : ""
-                          }`
-                        : sftAvailable
-                          ? `Higher fidelity · SFT${qualityReady?.model ? ` · ${qualityReady.model}` : ""}`
-                          : `Higher fidelity · more steps${qualityReady?.model ? ` · ${qualityReady.model}` : ""} (SFT unconfirmed)`}
+                      ? "Turbo · lower latency"
+                      : qualitySegmentHint({ loading: healthLoading, sftAvailable })}
                   </span>
                   {blocked ? (
-                    <span className="mt-1 block text-[11px] text-alchemy-danger">
+                    <span className="mt-0.5 block text-[11px] text-alchemy-danger">
                       {item?.readinessReason || "Not ready"}
                     </span>
                   ) : null}
@@ -892,191 +873,81 @@ export function CreateForm() {
               );
             })}
           </div>
-        </section>
-
-        {/* Optional post-processing — disabled by default; never blocks generation */}
-        <section className="mb-5">
-          <button
-            type="button"
-            onClick={() => setPostFxOpen((o) => !o)}
-            className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/60 px-3 py-2.5 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
-          >
-            <span className="font-medium">
-              Post-processing{" "}
-              <span className="font-normal text-alchemy-muted">(optional)</span>
-            </span>
-            <span className="text-xs text-alchemy-muted">
-              {postFxOpen ? "Hide" : "Show"} · {postFxPreset === "off" ? "Off" : postFxPreset === "light" ? "Light polish" : "Loudness normalize"}
-            </span>
-          </button>
-          {postFxOpen ? (
-            <div className="mt-3 space-y-3 rounded-xl border border-alchemy-border bg-alchemy-bg/30 px-3 py-4">
-              <p className="text-xs text-alchemy-muted">
-                Conservative ffmpeg CPU effects after generation. Default is{" "}
-                <strong className="text-alchemy-text">Off</strong>. Missing ffmpeg skips FX
-                and still completes the track — it never fails a finished generation.
-              </p>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {(
-                  [
-                    {
-                      id: "off" as const,
-                      label: "Off",
-                      desc: "No post-FX (default).",
-                    },
-                    {
-                      id: "light" as const,
-                      label: "Light polish",
-                      desc: "High-pass + gentle presence EQ + soft true-peak limit.",
-                    },
-                    {
-                      id: "loudness" as const,
-                      label: "Loudness normalize",
-                      desc: "loudnorm to env targets + true-peak limit.",
-                    },
-                  ] as const
-                ).map((item) => {
-                  const active = postFxPreset === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      disabled={formDisabled}
-                      onClick={() => setPostFxPreset(item.id)}
-                      className={`rounded-xl border px-3 py-3 text-left transition focus-visible:ring-2 focus-visible:ring-alchemy-accent/60 disabled:opacity-50 ${
-                        active
-                          ? "border-alchemy-gold/70 bg-alchemy-gold/10 text-alchemy-text"
-                          : "border-alchemy-border bg-alchemy-bg text-alchemy-muted hover:border-alchemy-accent/40"
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold text-alchemy-text">
-                        {item.label}
-                      </span>
-                      <span className="mt-1 block text-[11px] leading-snug">{item.desc}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="rounded-lg border border-alchemy-border/80 bg-alchemy-bg/50 px-3 py-2 text-xs text-alchemy-muted">
-                <p>
-                  ffmpeg:{" "}
-                  <span
-                    className={
-                      health?.postprocess?.ffmpegAvailable
-                        ? "text-alchemy-success"
-                        : "text-alchemy-gold"
-                    }
-                  >
-                    {healthLoading
-                      ? "…"
-                      : health?.postprocess?.ffmpegAvailable
-                        ? health.postprocess.ffmpegPathConfigured
-                          ? "available (FFMPEG_PATH)"
-                          : "available (PATH)"
-                        : "not found"}
-                  </span>
-                  {postFxPreset !== "off" && !health?.postprocess?.ffmpegAvailable ? (
-                    <span className="text-alchemy-gold">
-                      {" "}
-                      — FX will be skipped for this run
-                    </span>
-                  ) : null}
-                </p>
-                {health?.postprocess?.hint ? (
-                  <p className="mt-1.5 text-alchemy-gold/90">{health.postprocess.hint}</p>
-                ) : null}
-              </div>
-            </div>
+          {/* Explanation only after interaction when Fast is selected without confirmed SFT */}
+          {presetTouched && !sftAvailable && preset === "fast" && !healthLoading ? (
+            <p className="mt-1.5 text-xs text-alchemy-muted">
+              Fast selected. Local SFT not confirmed in inventory — Quality uses more steps
+              when available.
+            </p>
+          ) : null}
+          {presetTouched && sftAvailable && preset === "quality" ? (
+            <p className="mt-1.5 text-xs text-alchemy-muted">
+              Quality preferred — local SFT confirmed.
+            </p>
           ) : null}
         </section>
 
-        {/* Fine-tune (collapsed) */}
-        <section className="mb-5">
+        {error ? (
+          <div className="mb-3 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
+            <p>{error}</p>
+            {errorHint ? (
+              <p className="mt-1 text-xs text-alchemy-gold/90">{errorHint}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        <button
+          type="submit"
+          disabled={!canGenerate || Boolean(isOpen)}
+          className="aa-btn-primary"
+        >
+          {busy
+            ? "Starting…"
+            : isOpen
+              ? "Generating…"
+              : aceUnhealthy
+                ? "Engine unavailable"
+                : aceBusy
+                  ? "Engine busy"
+                  : songFocusBlocked
+                    ? "Song focus unavailable"
+                    : "Generate"}
+        </button>
+
+        {/* One Fine-tune drawer */}
+        <section className="mt-3">
           <button
             type="button"
             onClick={() => setFineTuneOpen((o) => !o)}
-            className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/60 px-3 py-2.5 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
+            aria-expanded={fineTuneOpen}
+            className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/50 px-3 py-2 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
           >
-            <span className="font-medium">Fine-tune</span>
-            <span className="text-xs text-alchemy-muted">
-              {fineTuneOpen ? "Hide" : "Show"} · templates, duration, quality levers, expert
+            <span className="font-medium text-alchemy-muted">
+              Fine-tune — style, lyrics, duration, templates, sound polish
+            </span>
+            <span className="shrink-0 text-xs text-alchemy-muted">
+              {fineTuneOpen ? "Hide" : "Show"}
             </span>
           </button>
 
           {fineTuneOpen ? (
-            <div className="mt-3 space-y-5 rounded-xl border border-alchemy-border bg-alchemy-bg/30 px-3 py-4">
-              {/* Honest quality levers */}
-              <div className="rounded-xl border border-alchemy-accent/25 bg-alchemy-accent/5 px-3 py-3 text-xs text-alchemy-muted">
-                <p className="mb-2 text-sm font-medium text-alchemy-text">Quality levers (honest)</p>
-                <ul className="space-y-1.5 leading-snug">
-                  <li>
-                    <span className="text-alchemy-gold">Preset:</span>{" "}
-                    {preset === "fast" ? "Fast (Turbo-class)" : "Quality (SFT-class)"}
-                    {" · "}steps{" "}
-                    <span className="tabular-nums text-alchemy-text">
-                      {advInferenceSteps.trim() ||
-                        health?.presets?.items?.find((x) => x.id === preset)?.inferenceSteps ||
-                        health?.settings?.inferenceSteps ||
-                        (preset === "fast" ? 8 : 32)}
-                    </span>
-                    {" · "}duration{" "}
-                    <span className="tabular-nums text-alchemy-text">{durationSec}s</span>
-                  </li>
-                  <li>
-                    <span className="text-alchemy-gold">Model:</span>{" "}
-                    requested{" "}
-                    <code className="text-[11px] text-alchemy-text">
-                      {advModel.trim() ||
-                        health?.presets?.items?.find((x) => x.id === preset)?.model ||
-                        health?.settings?.model ||
-                        "(server default)"}
-                    </code>
-                    . Actual checkpoint is labeled only after the worker confirms it — never
-                    treat requested as already-ran.
-                  </li>
-                  <li>
-                    <span className="text-alchemy-gold">Seed / variation:</span>{" "}
-                    {variationOf
-                      ? "This run is a variation — ACE-Step uses a new random seed."
-                      : "New generations use a random seed. Generate variation from Library prefills prompt/settings and rolls a new seed."}
-                  </li>
-                  <li>
-                    <span className="text-alchemy-gold">Planning:</span>{" "}
-                    {planningMode === "song-focus"
-                      ? plannerAvailable
-                        ? "Song focus (local planner, thinking on)"
-                        : "Song focus selected — unavailable (pick Direct)"
-                      : "Direct (thinking off)"}
-                  </li>
-                  <li>
-                    <span className="text-alchemy-gold">Post-FX:</span>{" "}
-                    {postFxPreset === "off"
-                      ? "Off (default)"
-                      : postFxPreset === "light"
-                        ? "Light polish"
-                        : "Loudness normalize"}
-                    {!health?.postprocess?.ffmpegAvailable && postFxPreset !== "off"
-                      ? " — ffmpeg missing, FX will skip"
-                      : ""}
-                  </li>
-                </ul>
-              </div>
-
-              {/* Templates / packs */}
+            <div className="mt-2 space-y-4 rounded-xl border border-alchemy-border bg-alchemy-bg/25 px-3 py-3">
+              {/* Templates */}
               {templates.length > 0 ? (
                 <div>
                   <label
                     htmlFor="create-pack"
-                    className="block text-sm font-medium text-alchemy-text mb-1.5"
+                    className="block text-sm font-medium text-alchemy-text mb-1"
+                    title="Genre pack filters templates"
                   >
-                    Genre pack
+                    Templates
                   </label>
                   <select
                     id="create-pack"
                     disabled={formDisabled}
                     value={packFilter}
                     onChange={(e) => onPackFilterChange(e.target.value)}
-                    className="mb-2 w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
+                    className="mb-1.5 w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2 text-sm text-alchemy-text focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
                   >
                     <option value="">All packs</option>
                     {packs.map((p) => (
@@ -1085,15 +956,8 @@ export function CreateForm() {
                       </option>
                     ))}
                   </select>
-
-                  <label
-                    htmlFor="create-template"
-                    className="block text-sm font-medium text-alchemy-text mb-1.5"
-                  >
-                    Template{" "}
-                    <span className="text-alchemy-muted font-normal">
-                      (replaces style tags unless you keep them)
-                    </span>
+                  <label htmlFor="create-template" className="sr-only">
+                    Template
                   </label>
                   <select
                     id="create-template"
@@ -1108,7 +972,7 @@ export function CreateForm() {
                       const t = templates.find((x) => x.id === id);
                       if (t) applyTemplate(t);
                     }}
-                    className="mb-2 w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
+                    className="mb-1.5 w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2 text-sm text-alchemy-text focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
                   >
                     <option value="">Choose a starting template…</option>
                     {visibleTemplates.map((t) => (
@@ -1138,7 +1002,7 @@ export function CreateForm() {
                       );
                     })}
                   </div>
-                  <label className="mt-2 flex items-center gap-2 text-xs text-alchemy-muted">
+                  <label className="mt-1.5 flex items-center gap-2 text-xs text-alchemy-muted">
                     <input
                       type="checkbox"
                       checked={keepTagsOnTemplate}
@@ -1146,12 +1010,8 @@ export function CreateForm() {
                       disabled={formDisabled}
                       className="accent-alchemy-accent"
                     />
-                    Keep my tags when switching template/pack (otherwise tags are replaced)
+                    Keep my tags when switching template
                   </label>
-                  <p className="mt-1.5 text-xs text-alchemy-muted">
-                    Applying a template overwrites prompt / lyrics / duration; style tags
-                    replace the previous pack&apos;s tags unless you opt to keep them.
-                  </p>
                 </div>
               ) : null}
 
@@ -1159,12 +1019,10 @@ export function CreateForm() {
               <div>
                 <label
                   htmlFor="create-title"
-                  className="block text-sm font-medium text-alchemy-text mb-1.5"
+                  className="block text-sm font-medium text-alchemy-text mb-1"
                 >
                   Title{" "}
-                  <span className="text-alchemy-muted font-normal">
-                    (editable — auto from prompt)
-                  </span>
+                  <span className="text-alchemy-muted font-normal">(auto)</span>
                 </label>
                 <input
                   id="create-title"
@@ -1181,40 +1039,36 @@ export function CreateForm() {
                   }}
                   maxLength={80}
                   placeholder={derivedTitle || "Untitled generation"}
-                  className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
+                  className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
                 />
               </div>
 
               {/* Style tags */}
               <div>
-                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
                   <label
                     htmlFor="create-style"
                     className="block text-sm font-medium text-alchemy-text"
+                    title="Comma-separated; conflicting genre stacks can hurt results"
                   >
-                    Style tags{" "}
-                    <span className="text-alchemy-muted font-normal">(optional)</span>
+                    Style tags
                   </label>
                   <button
                     type="button"
                     disabled={formDisabled || styleTags.length === 0}
                     onClick={clearTags}
-                    className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-2.5 py-1 text-xs text-alchemy-muted hover:border-alchemy-danger/40 hover:text-alchemy-danger disabled:opacity-40"
+                    className="rounded-lg border border-alchemy-border bg-alchemy-elevated px-2 py-0.5 text-xs text-alchemy-muted hover:border-alchemy-danger/40 hover:text-alchemy-danger disabled:opacity-40"
                   >
-                    Clear tags
+                    Clear
                   </button>
                 </div>
-                <p className="mb-1.5 text-xs text-alchemy-muted">
-                  Comma-separated tags, or tap a suggestion. Conflicting or stacked genre
-                  tags often harm results — clear or replace when changing packs.
-                </p>
                 <input
                   id="create-style"
                   disabled={formDisabled}
                   value={style}
                   onChange={(e) => setStyle(e.target.value)}
                   placeholder="lo-fi, ambient, cinematic"
-                  className="mb-2 w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
+                  className="mb-1.5 w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 disabled:opacity-60"
                 />
                 <div className="flex flex-wrap gap-1.5">
                   {STYLE_SUGGESTIONS.map((tag) => {
@@ -1238,41 +1092,25 @@ export function CreateForm() {
                     );
                   })}
                 </div>
-                {styleTags.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {styleTags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-md bg-alchemy-elevated px-2 py-0.5 text-xs text-alchemy-text"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
               </div>
 
               {/* Lyrics */}
               <div>
                 <label
                   htmlFor="create-lyrics"
-                  className="block text-sm font-medium text-alchemy-text mb-1.5"
+                  className="block text-sm font-medium text-alchemy-text mb-1"
+                  title="Blank or [inst] for instrumental"
                 >
-                  Lyrics{" "}
-                  <span className="text-alchemy-muted font-normal">(optional)</span>
+                  Lyrics
                 </label>
-                <p className="mb-1.5 text-xs text-alchemy-muted">
-                  Leave blank or use <code className="text-[11px]">[inst]</code> for
-                  instrumental.
-                </p>
                 <textarea
                   id="create-lyrics"
                   disabled={formDisabled}
                   value={lyrics}
                   onChange={(e) => setLyrics(e.target.value)}
-                  rows={5}
+                  rows={4}
                   placeholder={"[Verse]\nLeave blank or use [inst] for instrumental…"}
-                  className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2.5 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 font-mono disabled:opacity-60"
+                  className="w-full rounded-xl border border-alchemy-border bg-alchemy-bg px-3 py-2 text-sm text-alchemy-text placeholder:text-alchemy-muted/70 focus:outline-none focus:ring-2 focus:ring-alchemy-accent/50 font-mono disabled:opacity-60"
                 />
               </div>
 
@@ -1280,12 +1118,10 @@ export function CreateForm() {
               <div>
                 <label
                   htmlFor="create-duration"
-                  className="block text-sm font-medium text-alchemy-text mb-1.5"
+                  className="block text-sm font-medium text-alchemy-text mb-1"
                 >
                   Duration:{" "}
-                  <span className="text-alchemy-accent tabular-nums">
-                    {durationSec}s
-                  </span>
+                  <span className="text-alchemy-accent tabular-nums">{durationSec}s</span>
                 </label>
                 <input
                   id="create-duration"
@@ -1298,65 +1134,87 @@ export function CreateForm() {
                   onChange={(e) => setDurationSec(Number(e.target.value))}
                   className="w-full accent-alchemy-accent disabled:opacity-60"
                 />
-                <div className="mt-1 flex justify-between text-[11px] text-alchemy-muted">
+                <div className="mt-0.5 flex justify-between text-[11px] text-alchemy-muted">
                   <span>30s</span>
-                  <span>Mock demos cap ~16s audio</span>
                   <span>180s</span>
                 </div>
               </div>
 
-              {/* Expert / Advanced */}
+              {/* Post-processing */}
+              <div>
+                <p
+                  className="mb-1 text-sm font-medium text-alchemy-text"
+                  title="Optional ffmpeg polish after generation; Off by default"
+                >
+                  Post-processing / sound polish
+                </p>
+                <div className="grid gap-1.5 sm:grid-cols-3">
+                  {(
+                    [
+                      { id: "off" as const, label: "Off" },
+                      { id: "light" as const, label: "Light polish" },
+                      { id: "loudness" as const, label: "Loudness" },
+                    ] as const
+                  ).map((item) => {
+                    const active = postFxPreset === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        disabled={formDisabled}
+                        aria-pressed={active}
+                        onClick={() => setPostFxPreset(item.id)}
+                        className={segmentBtn(active)}
+                      >
+                        <span className="block text-sm font-semibold text-alchemy-text">
+                          {item.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {postFxPreset !== "off" &&
+                !healthLoading &&
+                health?.postprocess?.ffmpegAvailable === false ? (
+                  <p className="mt-1 text-xs text-alchemy-gold">
+                    ffmpeg not found — FX will be skipped
+                    {health.postprocess.hint ? ` · ${health.postprocess.hint}` : ""}
+                  </p>
+                ) : null}
+              </div>
+
+              {/* Advanced / expert */}
               <div>
                 <button
                   type="button"
                   onClick={() => setAdvancedOpen((o) => !o)}
-                  className="flex w-full items-center justify-between rounded-xl border border-alchemy-border bg-alchemy-bg/60 px-3 py-2 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
+                  aria-expanded={advancedOpen}
+                  className="flex w-full items-center justify-between rounded-lg border border-alchemy-border bg-alchemy-bg/50 px-3 py-1.5 text-left text-sm text-alchemy-text hover:border-alchemy-accent/40"
                 >
-                  <span className="font-medium">Expert / advanced</span>
+                  <span className="font-medium">Advanced / expert</span>
                   <span className="text-xs text-alchemy-muted">
-                    {advancedOpen ? "Hide" : "Show"} · mode / inference
+                    {advancedOpen ? "Hide" : "Show"}
                   </span>
                 </button>
                 {advancedOpen ? (
-                  <div className="mt-2 space-y-3 rounded-xl border border-alchemy-border bg-alchemy-bg/40 px-3 py-3 text-xs text-alchemy-muted">
-                    <p>
-                      Mode:{" "}
-                      <span className="font-medium text-alchemy-text">
-                        {healthLoading ? "…" : health?.mode ?? "unknown"}
+                  <div className="mt-2 space-y-2 rounded-lg border border-alchemy-border bg-alchemy-bg/40 px-3 py-3 text-xs text-alchemy-muted">
+                    <p title="Requested model is never labeled as actual until confirmed">
+                      Planning:{" "}
+                      <span className="text-alchemy-text">
+                        {planningMode === "song-focus"
+                          ? healthLoading
+                            ? "Song focus · checking…"
+                            : plannerConfirmed
+                              ? "Song focus (planner on)"
+                              : "Song focus (unavailable — pick Direct)"
+                          : "Direct"}
                       </span>
-                      {health?.settings?.busy ? (
-                        <span className="ml-2 text-alchemy-gold">
-                          · GPU busy (single-flight)
-                        </span>
-                      ) : null}
-                    </p>
-                    <p>
-                      ACE-Step health:{" "}
-                      <span
-                        className={`font-medium ${
-                          health?.aceStep
-                            ? "text-alchemy-success"
-                            : "text-alchemy-muted"
-                        }`}
-                      >
-                        {healthLoading
-                          ? "…"
-                          : health?.aceStep
-                            ? "reachable"
-                            : "unreachable / not required"}
+                      {" · "}
+                      Preset:{" "}
+                      <span className="text-alchemy-text">
+                        {preset === "fast" ? "Fast" : "Quality"}
                       </span>
-                      {health?.settings?.hasApiKey != null ? (
-                        <span className="ml-2">
-                          · API key configured:{" "}
-                          <span className="text-alchemy-text">
-                            {health.settings.hasApiKey ? "yes" : "no"}
-                          </span>
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="text-alchemy-muted/80">
-                      Optional overrides POST to the Next.js API only. Keys stay on the
-                      server. Defaults suit RTX 3080 10GB (batch=1, thinking off).
+                      {sftAvailable ? " · SFT confirmed" : ""}
                     </p>
                     <div className="grid gap-2 sm:grid-cols-2">
                       <label className="block">
@@ -1373,7 +1231,12 @@ export function CreateForm() {
                             setAdvTouched(true);
                             setAdvInferenceSteps(e.target.value);
                           }}
-                          placeholder={String(health?.settings?.inferenceSteps ?? 8)}
+                          placeholder={String(
+                            qualityReady?.inferenceSteps ??
+                              fastReady?.inferenceSteps ??
+                              health?.settings?.inferenceSteps ??
+                              8
+                          )}
                           className="w-full rounded-lg border border-alchemy-border bg-alchemy-bg px-2 py-1.5 text-sm text-alchemy-text disabled:opacity-60"
                         />
                       </label>
@@ -1399,7 +1262,7 @@ export function CreateForm() {
                       </label>
                       <label className="block sm:col-span-2">
                         <span className="mb-1 block text-[11px] text-alchemy-muted">
-                          Model (optional)
+                          Model override (optional)
                         </span>
                         <input
                           disabled={formDisabled}
@@ -1408,99 +1271,42 @@ export function CreateForm() {
                             setAdvTouched(true);
                             setAdvModel(e.target.value);
                           }}
-                          placeholder={
-                            health?.settings?.model ||
-                            "server default / ACESTEP_MODEL_*"
-                          }
+                          placeholder="server default"
                           className="w-full rounded-lg border border-alchemy-border bg-alchemy-bg px-2 py-1.5 text-sm text-alchemy-text disabled:opacity-60"
                         />
                       </label>
-                      <label className="flex items-center gap-2 sm:col-span-2 opacity-80">
-                        <input
-                          type="checkbox"
-                          disabled
-                          checked={planningMode === "song-focus"}
-                          readOnly
-                          className="accent-alchemy-accent"
-                        />
-                        <span>
-                          Thinking via Song focus only (local ACE planner/LM). Direct keeps
-                          thinking off. Batch stays 1.
-                          {planningMode === "song-focus"
-                            ? plannerAvailable
-                              ? " · Song focus selected"
-                              : " · Song focus selected but planner unavailable"
-                            : " · Direct (thinking off)"}
-                        </span>
-                      </label>
                     </div>
-                    {health?.settings ? (
-                      <p className="text-[11px] text-alchemy-muted/80">
-                        Server: steps={health.settings.inferenceSteps}, format=
-                        {health.settings.audioFormat}, batch=
-                        {health.settings.batchSize}, poll=
-                        {health.settings.pollIntervalMs}ms, timeout=
-                        {health.settings.timeoutMs != null
-                          ? Math.round(health.settings.timeoutMs / 1000)
-                          : "?"}
-                        s, singleFlight=
-                        {health.settings.singleFlight ? "on" : "off"}
-                      </p>
-                    ) : null}
                   </div>
                 ) : null}
               </div>
             </div>
           ) : null}
         </section>
-
-        {error ? (
-          <div className="mb-4 rounded-lg border border-alchemy-danger/40 bg-alchemy-danger/10 px-3 py-2 text-sm text-alchemy-danger">
-            <p>{error}</p>
-            {errorHint ? (
-              <p className="mt-1 text-xs text-alchemy-gold/90">{errorHint}</p>
-            ) : null}
-          </div>
-        ) : null}
-
-        <button
-          type="submit"
-          disabled={!canGenerate || Boolean(isOpen)}
-          className="aa-btn-primary"
-        >
-          {busy
-            ? "Starting…"
-            : isOpen
-              ? "Generating…"
-              : aceUnhealthy
-                ? "ACE-Step offline"
-                : aceBusy
-                  ? "GPU busy"
-                  : songFocusBlocked
-                    ? "Song focus unavailable"
-                    : "Generate"}
-        </button>
       </form>
 
-      <aside className="aa-card p-5 sm:p-6" aria-live="polite">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-alchemy-muted">
+      {/* Diagnostics — collapsed by default; not in primary flow */}
+      <DiagnosticsPanel compact />
+
+      <aside className="aa-card aa-card-light p-4 sm:p-5" aria-live="polite">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-alchemy-muted/80">
           Result
         </h2>
         {!generation ? (
-          <div className="aa-empty mt-4">
-            <p>
-              Your generation will appear here. Mock mode synthesizes a short
-              musical demo WAV so play and download work without an ACE-Step
-              server.
-            </p>
+          <div className="aa-empty aa-empty-quiet mt-3 py-5">
+            <p className="text-alchemy-muted/80">No track yet.</p>
           </div>
         ) : (
-          <div className="mt-4 space-y-4">
+          <div className="mt-3 space-y-3">
             <div>
-              <p className="font-medium text-alchemy-text">{generation.title}</p>
+              <p
+                className={`font-medium text-alchemy-text ${
+                  generation.status === "completed" ? "text-lg" : ""
+                }`}
+              >
+                {generation.title}
+              </p>
               <p className="mt-1 text-xs text-alchemy-muted">
-                Status: <StatusPill status={generation.status} /> · mode{" "}
-                {generation.mode}
+                Status: <StatusPill status={generation.status} />
                 {generation.attemptCount > 1
                   ? ` · attempt ${generation.attemptCount}`
                   : ""}
@@ -1518,17 +1324,17 @@ export function CreateForm() {
                   src={`/api/audio/${generation.id}`}
                   title={generation.title}
                 />
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <a
                     href={`/api/audio/${generation.id}?download=1`}
-                    className="aa-btn"
+                    className="aa-btn border-alchemy-accent/40 text-alchemy-text"
                   >
                     Download
                   </a>
                   <button
                     type="button"
                     onClick={() => router.push("/library")}
-                    className="aa-btn"
+                    className="aa-btn border-alchemy-accent/40 text-alchemy-text"
                   >
                     Open library
                   </button>
@@ -1536,7 +1342,7 @@ export function CreateForm() {
                     type="button"
                     disabled={actionBusy}
                     onClick={() => void onDelete()}
-                    className="aa-btn-danger"
+                    className="aa-btn-danger !border-transparent !bg-transparent !px-2 !py-1 text-xs opacity-60 hover:opacity-100"
                   >
                     Delete
                   </button>
@@ -1550,7 +1356,7 @@ export function CreateForm() {
                 onCancel={() => void onCancel()}
               />
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {(generation.status === "failed" ||
                   generation.status === "cancelled") && (
                   <button
@@ -1566,7 +1372,7 @@ export function CreateForm() {
                   type="button"
                   disabled={actionBusy}
                   onClick={() => void onDelete()}
-                  className="aa-btn-danger"
+                  className="aa-btn-danger !border-transparent !bg-transparent !px-2 !py-1 text-xs opacity-60 hover:opacity-100"
                 >
                   Delete
                 </button>
@@ -1606,7 +1412,7 @@ function RunningModelLine({ generation }: { generation: Generation }) {
       <p>
         {display.confirmed ? (
           <>
-            <span className="text-alchemy-success">Running / used</span>
+            <span className="text-alchemy-success">Used</span>
             {": "}
             <span className="font-medium text-alchemy-text">
               {[presetLabel, providerLabel, display.detail].filter(Boolean).join(" · ")}
@@ -1620,8 +1426,7 @@ function RunningModelLine({ generation }: { generation: Generation }) {
               {[presetLabel, providerLabel, display.detail].filter(Boolean).join(" · ")}
             </span>
             <span className="mt-0.5 block text-[11px] text-alchemy-muted/90">
-              Actual model/provider is shown only after the worker confirms it — never
-              treated as the model that already ran.
+              Actual model shown only after the worker confirms it.
             </span>
           </>
         )}
@@ -1666,14 +1471,10 @@ function GenerationProgress({
             <span className="text-xs tabular-nums text-alchemy-muted">{Math.round(pct)}%</span>
           ) : null}
         </div>
-        <dl className="mt-3 grid gap-1.5 font-mono text-[11px] text-alchemy-muted sm:grid-cols-2">
+        <dl className="mt-3 grid gap-1.5 text-[11px] text-alchemy-muted sm:grid-cols-2">
           <div>
             <dt className="inline text-alchemy-muted/80">Stage · </dt>
             <dd className="inline text-alchemy-text">{stage}</dd>
-          </div>
-          <div>
-            <dt className="inline text-alchemy-muted/80">Status · </dt>
-            <dd className="inline text-alchemy-gold">{generation.status}</dd>
           </div>
           <div className="sm:col-span-2">
             <dt className="inline text-alchemy-muted/80">
@@ -1699,7 +1500,7 @@ function GenerationProgress({
         type="button"
         disabled={actionBusy}
         onClick={onCancel}
-        className="aa-btn-danger"
+        className="aa-btn-danger !border-transparent !bg-transparent !px-2 !py-1 text-xs opacity-70 hover:opacity-100"
       >
         {actionBusy ? "Cancelling…" : "Cancel"}
       </button>
@@ -1707,118 +1508,45 @@ function GenerationProgress({
   );
 }
 
-function GpuStatusPanel({
+/**
+ * Truthful engine status near Create title.
+ * Never labels mock when ACE-Step is available; never invents readiness while loading.
+ */
+function EngineStatusPill({
   health,
   loading,
-  sftAvailable,
+  generating,
 }: {
   health: HealthInfo | null;
   loading: boolean;
-  sftAvailable: boolean;
+  generating: boolean;
 }) {
-  if (loading || !health) {
-    return (
-      <div className="mb-4 rounded-lg border border-alchemy-border bg-alchemy-bg/50 px-3 py-2 font-mono text-[11px] text-alchemy-muted sm:text-xs">
-        Checking local ACE / GPU status…
-      </div>
-    );
-  }
-  const aceUp = health.mode === "mock" || health.aceStep;
-  const fast = health.presets?.items?.find((x) => x.id === "fast");
-  const quality = health.presets?.items?.find((x) => x.id === "quality");
+  const state = resolveEnginePillState({
+    loading,
+    generating,
+    mode: health?.mode,
+    aceStep: health?.aceStep,
+  });
+  const label = enginePillLabel(state);
+  const className =
+    state === "generating"
+      ? "rounded-full border border-alchemy-accent/50 bg-alchemy-accent/10 px-2.5 py-1 text-[11px] font-medium text-alchemy-accentHover"
+      : state === "ready"
+        ? "rounded-full border border-alchemy-success/40 bg-alchemy-success/10 px-2.5 py-1 text-[11px] font-medium text-alchemy-success"
+        : state === "unavailable"
+          ? "rounded-full border border-alchemy-danger/40 bg-alchemy-danger/10 px-2.5 py-1 text-[11px] font-medium text-alchemy-danger"
+          : "rounded-full border border-alchemy-border bg-alchemy-elevated px-2.5 py-1 text-[11px] text-alchemy-muted";
+  const title =
+    state === "ready" && health?.mode === "ace-step"
+      ? "ACE-Step connected"
+      : state === "ready" && health?.mode === "mock"
+        ? "Local demo synthesizer"
+        : state === "unavailable"
+          ? "ACE-Step offline"
+          : undefined;
   return (
-    <div className="mb-4 rounded-lg border border-alchemy-border bg-alchemy-bg/50 px-3 py-2 font-mono text-[11px] leading-relaxed text-alchemy-muted sm:text-xs">
-      <p>
-        Local ACE:{" "}
-        <span className={aceUp ? "text-alchemy-success font-medium" : "text-alchemy-danger font-medium"}>
-          {health.mode === "mock"
-            ? "mock (no GPU)"
-            : health.aceStep
-              ? "up"
-              : "down"}
-        </span>
-        {health.settings?.busy ? (
-          <span className="text-alchemy-gold"> · busy</span>
-        ) : null}
-        {health.models?.reachable != null ? (
-          <span>
-            {" "}
-            · models probe: {health.models.reachable ? "reachable" : "env-fallback"}
-          </span>
-        ) : null}
-      </p>
-      <p className="mt-1">
-        Fast:{" "}
-        <span className="text-alchemy-text">
-          {fast?.ready === false ? "not ready" : "ready"}
-          {fast?.model ? ` (${fast.model})` : ""}
-        </span>
-        {" · "}
-        Quality:{" "}
-        <span className="text-alchemy-text">
-          {quality?.ready === false ? "not ready" : "ready"}
-          {quality?.model ? ` (${quality.model})` : ""}
-          {sftAvailable ? " · SFT confirmed" : " · SFT unconfirmed"}
-        </span>
-      </p>
-      {health.qualityTier || health.capabilities?.length ? (
-        <p className="mt-1">
-          Tier:{" "}
-          <span className="text-alchemy-text">{health.qualityTier || "local-sft"}</span>
-          {health.capabilities?.some((c) => c.id === "remote-xl-sft") ? (
-            <>
-              {" · "}
-              remote-xl-sft:{" "}
-              <span className="text-alchemy-text">
-                {health.capabilities.find((c) => c.id === "remote-xl-sft")?.available
-                  ? "available"
-                  : health.capabilities.find((c) => c.id === "remote-xl-sft")?.configured
-                    ? "configured (not confirmed)"
-                    : "not configured"}
-              </span>
-            </>
-          ) : null}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function HealthBadge({
-  health,
-  loading,
-}: {
-  health: HealthInfo | null;
-  loading: boolean;
-}) {
-  if (loading || !health) {
-    return (
-      <span className="rounded-full border border-alchemy-border bg-alchemy-elevated px-2.5 py-1 text-[11px] text-alchemy-muted">
-        Checking…
-      </span>
-    );
-  }
-  const ok =
-    health.mode === "mock" || (health.mode === "ace-step" && health.aceStep);
-  return (
-    <span
-      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-        ok
-          ? "border-alchemy-success/40 bg-alchemy-success/10 text-alchemy-success"
-          : "border-alchemy-danger/40 bg-alchemy-danger/10 text-alchemy-danger"
-      }`}
-      title={
-        health.mode === "ace-step"
-          ? `ACE-Step ${health.aceStep ? "ok" : "down"}`
-          : "Mock synthesizer"
-      }
-    >
-      {health.mode}
-      {health.mode === "ace-step"
-        ? health.aceStep
-          ? " · online"
-          : " · offline"
-        : " · ready"}
+    <span className={className} title={title}>
+      {label}
     </span>
   );
 }

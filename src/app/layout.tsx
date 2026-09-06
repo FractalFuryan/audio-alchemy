@@ -27,12 +27,14 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
+      { url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
       { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
       { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
       { url: "/icons/icon.svg", type: "image/svg+xml" },
+      { url: "/brand/audio-alchemy-mark.png", type: "image/png" },
     ],
     apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180" }],
-    other: [{ rel: "mask-icon", url: "/icons/icon-192.png" }],
+    other: [{ rel: "mask-icon", url: "/icons/icon.svg", color: "#d4af37" }],
   },
   formatDetection: {
     telephone: false,
@@ -45,12 +47,16 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0b1020",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#120715" },
+    { media: "(prefers-color-scheme: light)", color: "#120715" },
+  ],
   colorScheme: "dark",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  maximumScale: 5,
   userScalable: true,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -65,8 +71,8 @@ export default function RootLayout({
       >
         <ServiceWorkerRegister />
         <Header />
-        <main className="mx-auto max-w-5xl px-4 py-8 sm:py-10">{children}</main>
-        <footer className="mx-auto max-w-5xl px-4 pb-10 pt-2 text-center text-xs text-alchemy-muted">
+        <main className="mx-auto w-full max-w-3xl px-4 py-4 sm:py-6">{children}</main>
+        <footer className="mx-auto max-w-3xl px-4 pb-10 pt-2 text-center text-xs text-alchemy-muted">
           Audio Alchemy — ownership-first music generation MVP
         </footer>
       </body>

@@ -2,11 +2,11 @@
 
 ## Purpose
 
-App-side support for evaluating ACE-Step **XL** checkpoints on a **20–24GB** (or larger) GPU via a **configured endpoint URL**. This is an optional, pull/client-outbound path. It does not create cloud accounts, billing, queues, or GPU infrastructure, and it does not make a home 10GB RTX 3080 into public shared compute.
+App-side support for evaluating ACE-Step **XL** checkpoints on a **20–24GB** (or larger) GPU via a **configured endpoint URL**. This is an optional, pull/client-outbound path. It does not create cloud accounts, billing, queues, or GPU infrastructure, and it never turns local development hardware into public shared compute.
 
 ## Local default (unchanged)
 
-On the home **RTX 3080 10GB** machine:
+On a local **10GB-class consumer GPU**:
 
 | Preset | Capability | Typical checkpoint |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ If `QUALITY_TIER=remote-xl-sft` but remote health does **not** confirm XL-SFT lo
 ## Non-goals
 
 - No cloud resource creation, auth products, billing, or multi-tenant queues in this path.
-- No sharing the home 3080 as a public remote worker.
+- No sharing local development hardware as a public remote worker.
 - No change to the local 2B SFT + Turbo default when `QUALITY_TIER=local-sft`.
 
 See also `.env.example`, `QUALITY.md`, `QUALITY_PLAN.md`.

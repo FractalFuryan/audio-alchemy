@@ -44,7 +44,7 @@ export function AudioPlayer({ src, title, compact }: Props) {
         <button
           type="button"
           onClick={toggle}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-alchemy-accent text-alchemy-bg font-semibold hover:bg-alchemy-accentHover transition-colors"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gen-gradient font-semibold text-white shadow-glow-accent transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-alchemy-gold/50"
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? "❚❚" : "▶"}
