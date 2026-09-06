@@ -1,0 +1,122 @@
+[
+  {
+    "id": "e01",
+    "prompt": "Dreamy synthwave with warm pads and a steady pulse",
+    "style": "synthwave, electronic",
+    "durationSec": 60
+  },
+  {
+    "id": "e02",
+    "prompt": "Lo-fi hip-hop with vinyl crackle and mellow Rhodes",
+    "style": "lo-fi, chill",
+    "durationSec": 60
+  },
+  {
+    "id": "e03",
+    "prompt": "Cinematic orchestral trailer with rising strings and brass hits",
+    "style": "cinematic, orchestral",
+    "durationSec": 45
+  },
+  {
+    "id": "e04",
+    "prompt": "Acoustic folk fingerpicking with soft brushes and warm room tone",
+    "style": "acoustic, folk",
+    "durationSec": 90
+  },
+  {
+    "id": "e05",
+    "prompt": "Deep house four-on-the-floor with filtered pads and warm bass",
+    "style": "house, dance",
+    "durationSec": 90
+  },
+  {
+    "id": "e06",
+    "prompt": "Jazz lounge trio \u2014 upright bass, brushed drums, soft piano",
+    "style": "jazz, lounge",
+    "durationSec": 60
+  },
+  {
+    "id": "e07",
+    "prompt": "Ambient drone with distant bells and slow harmonic swells",
+    "style": "ambient, drone",
+    "durationSec": 120
+  },
+  {
+    "id": "e08",
+    "prompt": "Heavy metal palm-muted riffs with thunderous drums",
+    "style": "metal, rock",
+    "durationSec": 60
+  },
+  {
+    "id": "e09",
+    "prompt": "Smooth R&B slow jam with silky keys and soft 808s",
+    "style": "r&b, soul",
+    "durationSec": 90
+  },
+  {
+    "id": "e10",
+    "prompt": "Funky groove with slap bass, wah guitar, and horn stabs",
+    "style": "funk, groove",
+    "durationSec": 60
+  },
+  {
+    "id": "e11",
+    "prompt": "Solo piano ballad with spacious reverb and tender melody",
+    "style": "piano, ballad",
+    "durationSec": 90
+  },
+  {
+    "id": "e12",
+    "prompt": "World percussion jam with hand drums and kalimba accents",
+    "style": "world, percussion",
+    "durationSec": 60
+  },
+  {
+    "id": "e13",
+    "prompt": "Dark techno warehouse pulse with industrial textures",
+    "style": "techno, dark",
+    "durationSec": 90
+  },
+  {
+    "id": "e14",
+    "prompt": "Country Americana with steel guitar and dusty road vibes",
+    "style": "country, americana",
+    "durationSec": 75
+  },
+  {
+    "id": "e15",
+    "prompt": "Chiptune 8-bit adventure theme with bouncy arpeggios",
+    "style": "chiptune, retro",
+    "durationSec": 45
+  },
+  {
+    "id": "e16",
+    "prompt": "Gospel-inspired choir pads over a steady soul groove",
+    "style": "gospel, soul",
+    "durationSec": 90
+  },
+  {
+    "id": "e17",
+    "prompt": "Latin jazz montuno with bright piano and tight percussion",
+    "style": "latin, jazz",
+    "durationSec": 60
+  },
+  {
+    "id": "e18",
+    "prompt": "Post-rock crescendo with delayed guitars and epic drums",
+    "style": "post-rock, cinematic",
+    "durationSec": 120
+  },
+  {
+    "id": "e19",
+    "prompt": "Trap beat with hard-hitting 808s and sparse hi-hats",
+    "style": "trap, hip-hop",
+    "durationSec": 45
+  },
+  {
+    "id": "e20",
+    "prompt": "Meditative new-age flute over soft pads and nature ambience",
+    "style": "new-age, ambient",
+    "durationSec": 120
+  }
+]

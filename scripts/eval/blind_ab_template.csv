@@ -1,0 +1,2 @@
+pair_id,rater_id_hash,left_label,right_label,left_path,right_path,preference,score_left_realism,score_right_realism,score_left_drum_authenticity,score_right_drum_authenticity,score_left_guitar_tone,score_right_guitar_tone,score_left_arrangement,score_right_arrangement,score_left_prompt_adherence,score_right_prompt_adherence,score_left_artifacts,score_right_artifacts,notes
+1,,,,path/to/a.mp3,path/to/b.mp3,tie,,,,,,,,,,,,,

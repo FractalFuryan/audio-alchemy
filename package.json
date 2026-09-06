@@ -1,0 +1,46 @@
+{
+  "name": "audio-alchemy",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
+    "cap:ios": "npx cap open ios",
+    "test:unit": "node scripts/test-ace-step-unit.mjs",
+    "eval:mock": "node scripts/eval/mock.mjs",
+    "eval": "node scripts/eval/run-eval.mjs",
+    "eval:compare": "node scripts/eval/compare.mjs"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.0.0",
+    "better-sqlite3": "^13.0.3",
+    "next": "^15.5.9",
+    "react": "^19.1.2",
+    "react-dom": "^19.1.2",
+    "uuid": "11.1.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@tauri-apps/cli": "^2",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.17.2",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "@types/uuid": "10.0.0",
+    "autoprefixer": "10.4.21",
+    "eslint": "9.34.0",
+    "eslint-config-next": "^15.5.9",
+    "postcss": "8.5.6",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.9.2"
+  }
+}

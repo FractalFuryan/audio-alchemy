@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 10% -10%, #1a1030 0%, transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, #0f1a2e 0%, transparent 50%),
+    #0a0a0f;
+  color: #f0f0f5;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

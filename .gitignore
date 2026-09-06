@@ -1,0 +1,41 @@
+node_modules
+/.next/
+/out/
+/build
+/.DS_Store
+*.pem
+.env
+.env*.local
+.vercel
+*.tsbuildinfo
+*.bak
+/data/
+!/data/.gitkeep
+coverage
+.pnp
+.pnp.*
+
+# Native / desktop
+src-tauri/target/
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+ios/App/Pods/
+ios/App/build/
+*.apk
+*.aab
+*.ipa
+# Capacitor generated config copy noise (keep platforms)
+.tmp-unit/
+.tmp-icon-venv/
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
+# Keep prompt templates tracked under data/
+!/data/templates/
+!/data/templates/**
+
+# Eval harness outputs
+scripts/eval/results/*
+!scripts/eval/results/.gitkeep
