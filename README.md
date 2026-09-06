@@ -2,7 +2,6 @@
 
 Ownership-first AI music generation MVP. Create tracks from a prompt (optional lyrics + duration), play and download them, and keep generations on your machine.
 
-Target repository: https://github.com/FractalFuryan/audio-alchemy
 
 ## Features
 
